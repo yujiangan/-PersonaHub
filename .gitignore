@@ -1,0 +1,33 @@
+# OS
+.bash_history
+.bash_logout
+.bashrc
+.cache/
+.motd_shown
+.profile
+.sudo_as_admin_successful
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Misc
+.ssh/
+.nvm/
+.local/
+.npm/
+.npmrc
