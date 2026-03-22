@@ -2,118 +2,65 @@
 
 ## 1. 概述
 
-### 1.1 项目简介
+本文档定义 PersonaHub 的技术架构与实现细节，面向开发者。
 
-**项目名称**: PersonaHub
-**项目类型**: AI Agent 应用（**规则化 ReAct 循环** + 工具调用 + 状态管理）
-**一句话描述**: 输入任意 GitHub 用户 ID，通过分析其公开数据（Profile、Repos、Events、Stars）推断用户偏好、技术栈、活跃时间，生成用户画像情报报告。
-**目标用户**: HR / 猎头、安全研究员、普通用户
+### 1.1 技术指标
 
-### 1.2 核心技术理念
+| 指标 | 值 |
+|------|-----|
+| 技术栈 | VitePlus + @vitejs/plugin-react + Nitro |
+| Agent 范式 | 规则化 ReAct 循环（无 LLM 依赖） |
+| 数据源 | GitHub REST API v3 |
+| 流式协议 | Server-Sent Events (SSE) |
+| 目标平台 | Vercel / Railway / Cloudflare Workers |
 
-本项目的 Agent 不依赖任何 LLM/AI 服务，ReAct 循环的 "Think" 步骤是**规则化的分析逻辑**：
+### 1.2 系统约束
 
-- Agent 根据当前**状态**（已获取哪些数据、还缺什么）决定下一步调用哪个工具
-- 最终报告由**结构化数据拼接生成**，纯规则驱动
-- 所有数据来源于 **GitHub REST API**，无第三方依赖
-
----
-
-## 2. 技术选型
-
-| 层级 | 技术选型 |
-|------|----------|
-| 前端框架 | VitePlus + @vitejs/plugin-react |
-| 后端框架 | Nitro（轻量 SSR + API） |
-| Agent 实现 | 纯手写 ReAct 循环（Node.js） |
-| 数据源 | GitHub REST API（服务端配置 Token） |
-| 流式传输 | SSE（Server-Sent Events） |
-| 部署目标 | Vercel / Railway / Cloudflare Workers |
-
-### 2.1 技术选型理由
-
-**VitePlus**: 轻量级 Vite 增强，保留 Vite 的极速开发体验
-**Nitro**: 极简服务端框架，支持 SSR、API Routes、SSE，开箱即用
-**纯手写 ReAct**: 无需 LLM API 成本，响应速度快，完全可控
+- **无 Token 前端输入**：GitHub PAT 配置于服务端环境变量
+- **无状态持久化**：每次请求独立完成分析，无会话存储
+- **请求超时**：单次分析最大耗时 60s，超时强制终止
+- **API 配额**：GitHub REST API 速率限制 5000 req/hour（认证后）
 
 ---
 
-## 3. 系统架构
-
-```
-┌─────────────┐      SSE       ┌─────────────┐
-│   前端       │  <──────────>  │   Nitro     │
-│  (VitePlus) │               │   后端      │
-│             │  HTTP POST    │             │
-└─────────────┘               └──────┬──────┘
-                                      │
-                              ┌───────▼───────┐
-                              │  ReAct Agent  │
-                              │  (手写循环)   │
-                              │  状态机驱动   │
-                              └───────┬───────┘
-                                      │
-                        ┌─────────────┼─────────────┐
-                        │             │             │
-                  ┌─────▼─────┐ ┌─────▼─────┐ ┌────▼────┐
-                  │ getUser   │ │ getUser   │ │ getUser │
-                  │ Profile   │ │ Events    │ │ Stars   │
-                  └───────────┘ └───────────┘ └─────────┘
-                                      │
-                              ┌───────▼───────┐
-                              │  GitHub API   │
-                              └───────────────┘
-```
-
-### 3.1 数据流向
-
-1. 用户在前端输入 GitHub User ID（**无需 Token**）
-2. 前端发送 POST 请求到 `/api/analyze`
-3. Nitro 后端接收请求，启动 ReAct Agent
-4. ReAct Agent 根据状态机调度工具，调用 GitHub API
-5. 每一步思考和结果通过 SSE 推送到前端
-6. Agent 收集完所有数据后，生成结构化报告
-7. 前端展示最终画像报告
-
----
-
-## 4. 项目结构
+## 2. 项目结构
 
 ```
 personahub/
 ├── src/
-│   ├── app/                      # 前端页面
-│   │   ├── App.tsx
-│   │   ├── main.tsx
+│   ├── app/                         # 前端 (VitePlus entry)
+│   │   ├── App.tsx                  # 根组件
+│   │   ├── main.tsx                 # 入口文件
 │   │   ├── index.html
 │   │   └── components/
-│   │       ├── SearchBar.tsx        # 搜索框组件
-│   │       ├── ThinkingStream.tsx   # 思考过程流式展示
-│   │       └── ProfileReport.tsx    # 画像报告展示
+│   │       ├── SearchBar.tsx
+│   │       ├── ThinkingStream.tsx
+│   │       └── ProfileReport.tsx
 │   │
-│   ├── server/                   # 后端逻辑
+│   ├── server/                      # 后端 (Nitro)
 │   │   ├── api/
-│   │   │   └── analyze.post.ts     # POST /api/analyze
+│   │   │   └── analyze.post.ts      # POST /api/analyze
 │   │   │
 │   │   ├── agent/
-│   │   │   ├── index.ts            # Agent 入口
-│   │   │   ├── state.ts            # 状态定义
-│   │   │   ├── reactor.ts          # ReAct 循环（核心）
-│   │   │   ├── report-builder.ts   # 报告生成器
+│   │   │   ├── index.ts             # Agent Facade
+│   │   │   ├── types.ts             # 状态 & 工具类型定义
+│   │   │   ├── reactor.ts           # ReAct 循环实现
+│   │   │   ├── scheduler.ts         # 动作调度器
+│   │   │   ├── report-builder.ts    # 报告生成
 │   │   │   │
-│   │   │   └── tools/              # GitHub API 工具
+│   │   │   └── tools/               # GitHub API 工具集
+│   │   │       ├── github-client.ts # API 客户端封装
 │   │   │       ├── getUserProfile.ts
 │   │   │       ├── getUserRepos.ts
 │   │   │       ├── getUserEvents.ts
 │   │   │       ├── getUserStars.ts
-│   │   │       └── getRepoDetails.ts
+│   │   │       └── errors.ts        # 错误类型
 │   │   │
 │   │   └── lib/
-│   │       ├── github.ts           # GitHub API 封装
-│   │       └── errors.ts           # 错误类型定义
+│   │       └── sse.ts               # SSE Emitter 实现
 │   │
-│   └── shared/                    # 共享类型
-│       └── types.ts
+│   └── shared/
+│       └── types.ts                 # 跨端类型定义
 │
 ├── package.json
 ├── nitro.config.ts
@@ -123,38 +70,14 @@ personahub/
 
 ---
 
-## 5. ReAct Agent 设计（核心）
+## 3. 类型系统
 
-### 5.1 设计理念
-
-ReAct（Reasoning + Acting）循环的核心是**状态机**：
-
-- Agent 维护一个**状态对象**，记录已获取的数据
-- 每一步根据当前状态，**规则化判断**下一步行动
-- 不依赖 LLM，所有决策由代码逻辑完成
-
-### 5.2 状态定义
+### 3.1 共享类型
 
 ```typescript
-// server/agent/state.ts
+// shared/types.ts
 
-interface AnalysisState {
-  userId: string;
-  profile: UserProfile | null;       // 基本信息
-  repos: UserRepo[];                 // 仓库列表
-  events: UserEvent[];               // 事件 timeline
-  stars: StarredRepo[];              // Star 的仓库
-  analysisProgress: {
-    profileDone: boolean;
-    reposDone: boolean;
-    eventsDone: boolean;
-    starsDone: boolean;
-  };
-  isDone: boolean;
-  error: Error | null;
-}
-
-interface UserProfile {
+export interface GitHubUser {
   login: string;
   id: number;
   avatarUrl: string;
@@ -162,9 +85,10 @@ interface UserProfile {
   publicRepos: number;
   followers: number;
   following: number;
+  createdAt: string;
 }
 
-interface UserRepo {
+export interface GitHubRepo {
   id: number;
   name: string;
   fullName: string;
@@ -173,19 +97,30 @@ interface UserRepo {
   stargazersCount: number;
   forksCount: number;
   topics: string[];
+  fork: boolean;
   createdAt: string;
   updatedAt: string;
 }
 
-interface UserEvent {
+export type GitHubEventType =
+  | 'PushEvent'
+  | 'CreateEvent'
+  | 'ForkEvent'
+  | 'WatchEvent'
+  | 'IssuesEvent'
+  | 'PullRequestEvent'
+  | 'IssueCommentEvent'
+  | 'PullRequestReviewEvent';
+
+export interface GitHubEvent {
   id: string;
-  type: EventType;
+  type: GitHubEventType;
   repo: { name: string; url: string };
-  payload: Record<string, any>;
-  createdAt: string;
+  payload: Record<string, unknown>;
+  createdAt: string;  // ISO 8601
 }
 
-interface StarredRepo {
+export interface GitHubStarredRepo {
   id: number;
   name: string;
   fullName: string;
@@ -196,467 +131,960 @@ interface StarredRepo {
 }
 ```
 
-### 5.3 ReAct 循环（状态机驱动）
+### 3.2 Agent 状态机类型
 
 ```typescript
-// server/agent/reactor.ts
+// server/agent/types.ts
 
-type Action = 'getProfile' | 'getRepos' | 'getEvents' | 'getStars' | 'buildReport' | 'done';
+export type Phase =
+  | 'INIT'
+  | 'FETCHING_PROFILE'
+  | 'FETCHING_REPOS'
+  | 'FETCHING_EVENTS'
+  | 'FETCHING_STARS'
+  | 'BUILDING_REPORT'
+  | 'DONE'
+  | 'ERROR';
 
-function decideNextAction(state: AnalysisState): Action {
-  // 1. 如果还没有获取 profile，优先获取基本信息
-  if (!state.profile) {
-    return 'getProfile';
-  }
-
-  // 2. 如果还没有获取 repos，获取仓库列表
-  if (!state.analysisProgress.reposDone) {
-    return 'getRepos';
-  }
-
-  // 3. 如果还没有获取 events，获取 timeline
-  if (!state.analysisProgress.eventsDone) {
-    return 'getEvents';
-  }
-
-  // 4. 如果还没有获取 stars，获取 Star 列表
-  if (!state.analysisProgress.starsDone) {
-    return 'getStars';
-  }
-
-  // 5. 如果所有数据都获取完成，生成报告
-  if (!state.isDone) {
-    return 'buildReport';
-  }
-
-  return 'done';
+export interface AnalysisContext {
+  userId: string;
+  phase: Phase;
+  profile: GitHubUser | null;
+  repos: GitHubRepo[];
+  events: GitHubEvent[];
+  stars: GitHubStarredRepo[];
+  error: GitHubAPIError | null;
+  startedAt: number;  // timestamp for timeout tracking
 }
 
-async function reactor(userId: string, stream: SSEMitter) {
-  const state: AnalysisState = {
-    userId,
-    profile: null,
-    repos: [],
-    events: [],
-    stars: [],
-    analysisProgress: {
-      profileDone: false,
-      reposDone: false,
-      eventsDone: false,
-      starsDone: false,
-    },
-    isDone: false,
-    error: null,
-  };
-
-  while (!state.isDone) {
-    const action = decideNextAction(state);
-
-    switch (action) {
-      case 'getProfile':
-        await stream.push({ type: 'thinking', content: '正在获取用户基本信息...' });
-        const profile = await tools.getUserProfile(userId);
-        state.profile = profile;
-        await stream.push({ type: 'observation', content: `获取成功：${profile.login}` });
-        break;
-
-      case 'getRepos':
-        await stream.push({ type: 'thinking', content: '正在分析仓库列表...' });
-        const repos = await tools.getUserRepos(userId);
-        state.repos = repos;
-        state.analysisProgress.reposDone = true;
-        await stream.push({ type: 'observation', content: `发现 ${repos.length} 个仓库` });
-        break;
-
-      case 'getEvents':
-        await stream.push({ type: 'thinking', content: '正在分析用户活动记录...' });
-        const events = await tools.getUserEvents(userId);
-        state.events = events;
-        state.analysisProgress.eventsDone = true;
-        await stream.push({ type: 'observation', content: `获取 ${events.length} 条活动记录` });
-        break;
-
-      case 'getStars':
-        await stream.push({ type: 'thinking', content: '正在分析 Star 记录...' });
-        const stars = await tools.getUserStars(userId);
-        state.stars = stars;
-        state.analysisProgress.starsDone = true;
-        await stream.push({ type: 'observation', content: `获取 ${stars.length} 个 Star` });
-        break;
-
-      case 'buildReport':
-        await stream.push({ type: 'thinking', content: '正在生成画像报告...' });
-        const report = reportBuilder.build(state);
-        state.report = report;
-        state.isDone = true;
-        await stream.push({ type: 'final_report', content: report });
-        break;
-
-      case 'done':
-        state.isDone = true;
-        break;
-    }
-  }
-
-  await stream.push({ type: 'done', content: '' });
+export interface GitHubAPIError extends Error {
+  status: number;
+  endpoint: string;
 }
 ```
 
-### 5.4 工具定义
+### 3.3 SSE 事件类型
 
-| 工具名 | 参数 | 返回 | 用途 |
-|--------|------|------|------|
-| `getUserProfile` | `id: string` | `UserProfile` | 获取用户基本信息 |
-| `getUserRepos` | `id: string, page?: number` | `UserRepo[]` | 获取仓库列表（语言、star 等） |
-| `getUserEvents` | `id: string, page?: number` | `UserEvent[]` | 获取 timeline 事件 |
-| `getUserStars` | `id: string, page?: number` | `StarredRepo[]` | 获取 Star 的仓库 |
-| `getRepoDetails` | `owner, repo` | `RepoDetails` | 获取仓库详情（备用） |
+```typescript
+// server/agent/types.ts
 
-### 5.5 思考过程流式输出
+export type SSEEventType =
+  | 'thinking'
+  | 'observation'
+  | 'final_report'
+  | 'error'
+  | 'done';
 
-每一步 Agent 的思考通过 SSE 推送到前端：
-
-```
-event: thinking
-data: {"content": "正在获取用户基本信息..."}
-
-event: observation
-data: {"content": "获取成功：octocat"}
-
-event: thinking
-data: {"content": "正在分析仓库列表..."}
-
-event: observation
-data: {"content": "发现 8 个仓库"}
-
-event: final_report
-data: {"content": "## 用户画像报告\n\n..."}
+export interface SSEEvent {
+  type: SSEEventType;
+  content: string;
+  timestamp?: number;
+}
 ```
 
 ---
 
-## 6. 报告生成器
+## 4. GitHub API 客户端
 
-### 6.1 报告结构
+### 4.1 客户端封装
 
 ```typescript
-// server/agent/report-builder.ts
+// server/agent/tools/github-client.ts
 
-interface ProfileReport {
-  basicInfo: {
-    username: string;
-    avatarUrl: string;
-    id: number;
-    bio: string | null;
-    publicRepos: number;
-    followers: number;
-    following: number;
+const BASE_URL = 'https://api.github.com';
+const TIMEOUT_MS = 10000;
+const RETRY_CONFIG = {
+  maxRetries: 2,
+  backoffMs: [100, 500],
+};
+
+export class GitHubClient {
+  constructor(private readonly token: string) {}
+
+  async fetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const url = `${BASE_URL}${endpoint}`;
+
+    for (let attempt = 0; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+        const response = await fetch(url, {
+          ...options,
+          signal: controller.signal,
+          headers: {
+            'Authorization': `Bearer ${this.token}`,
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'PersonaHub/1.0',
+            ...options.headers,
+          },
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw this.mapStatusToError(response.status, endpoint);
+        }
+
+        return response.json();
+      } catch (err) {
+        if (attempt === RETRY_CONFIG.maxRetries) throw err;
+        if (this.isRetryableError(err)) {
+          await this.delay(RETRY_CONFIG.backoffMs[attempt]);
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('Unexpected loop exit');
+  }
+
+  private mapStatusToError(status: number, endpoint: string): GitHubAPIError {
+    const error = new Error() as GitHubAPIError;
+    error.status = status;
+    error.endpoint = endpoint;
+
+    switch (status) {
+      case 404:
+        error.message = 'User not found';
+        break;
+      case 403:
+        error.message = 'Rate limit exceeded';
+        break;
+      case 500:
+      case 502:
+      case 503:
+        error.message = 'GitHub API unavailable';
+        break;
+      default:
+        error.message = `GitHub API error: ${status}`;
+    }
+    return error;
+  }
+
+  private isRetryableError(err: unknown): boolean {
+    if (err instanceof Error && err.name === 'AbortError') return false;
+    if (err instanceof GitHubAPIError) {
+      return [403, 500, 502, 503].includes(err.status);
+    }
+    return true;
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+}
+```
+
+### 4.2 分页处理
+
+```typescript
+// server/agent/tools/github-client.ts
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  hasMore: boolean;
+  nextPage: number | null;
+}
+
+export async function fetchAllPages<T>(
+  client: GitHubClient,
+  endpoint: string,
+  maxPages: number = 5
+): Promise<T[]> {
+  const results: T[] = [];
+  let page = 1;
+
+  while (page <= maxPages) {
+    const data = await client.fetch<T[]>(`${endpoint}?per_page=100&page=${page}`);
+    if (!data || data.length === 0) break;
+    results.push(...data);
+    if (data.length < 100) break;
+    page++;
+  }
+
+  return results;
+}
+```
+
+### 4.3 工具函数签名
+
+```typescript
+// server/agent/tools/getUserProfile.ts
+export async function getUserProfile(
+  client: GitHubClient,
+  userId: string
+): Promise<GitHubUser>;
+
+// server/agent/tools/getUserRepos.ts
+export async function getUserRepos(
+  client: GitHubClient,
+  userId: string
+): Promise<GitHubRepo[]>;
+
+// server/agent/tools/getUserEvents.ts
+export async function getUserEvents(
+  client: GitHubClient,
+  userId: string
+): Promise<GitHubEvent[]>;
+
+// server/agent/tools/getUserStars.ts
+export async function getUserStars(
+  client: GitHubClient,
+  userId: string
+): Promise<GitHubStarredRepo[]>;
+```
+
+---
+
+## 5. ReAct 循环实现
+
+### 5.1 状态转移图
+
+```
+       ┌────────────────────────────────────────────────────────────┐
+       │                                                            │
+       ▼                                                            │
+   ┌───────┐     ┌──────────────┐     ┌───────────────┐           │
+   │ INIT  │────►│FETCHING_PROFILE│────►│ FETCHING_REPOS │           │
+   └───────┘     └──────┬───────┘     └───────┬───────┘           │
+                        │                       │                   │
+                        │ error                 │ error              │
+                        ▼                       ▼                    │
+                   ┌─────────┐            ┌───────────┐              │
+                   │  ERROR  │            │FETCHING_  │              │
+                   │(SSE err)│            │  EVENTS   │              │
+                   └─────────┘            └─────┬─────┘              │
+                                                 │                     │
+                                                 │ error               │
+                                                 ▼                     │
+                                           ┌─────────────┐            │
+                                           │FETCHING_STARS│            │
+                                           └──────┬──────┘            │
+                                                  │                    │
+                                                  │ error              │
+                                                  ▼                    │
+                                           ┌──────────────┐           │
+                                           │BUILDING_REPORT│           │
+                                           └──────┬───────┘           │
+                                                  │                    │
+                                                  ▼                    │
+                                            ┌─────────┐                │
+                                            │  DONE   │◄───────────────┘
+                                            └─────────┘  (report built)
+```
+
+### 5.2 动作调度器
+
+```typescript
+// server/agent/scheduler.ts
+
+import { Phase, AnalysisContext } from './types';
+import { GitHubClient } from './tools/github-client';
+import * as tools from './tools';
+
+export interface SchedulerResult {
+  nextPhase: Phase;
+  action: () => Promise<void>;
+}
+
+export function decideNextAction(
+  ctx: AnalysisContext
+): SchedulerResult {
+  switch (ctx.phase) {
+    case 'INIT':
+      return {
+        nextPhase: 'FETCHING_PROFILE',
+        action: async () => {
+          ctx.profile = await tools.getUserProfile(ctx.userId);
+        },
+      };
+
+    case 'FETCHING_PROFILE':
+      return {
+        nextPhase: 'FETCHING_REPOS',
+        action: async () => {
+          ctx.repos = await tools.getUserRepos(ctx.userId);
+        },
+      };
+
+    case 'FETCHING_REPOS':
+      return {
+        nextPhase: 'FETCHING_EVENTS',
+        action: async () => {
+          ctx.events = await tools.getUserEvents(ctx.userId);
+        },
+      };
+
+    case 'FETCHING_EVENTS':
+      return {
+        nextPhase: 'FETCHING_STARS',
+        action: async () => {
+          ctx.stars = await tools.getUserStars(ctx.userId);
+        },
+      };
+
+    case 'FETCHING_STARS':
+      return {
+        nextPhase: 'BUILDING_REPORT',
+        action: async () => {
+          // Report building is handled separately in reactor
+        },
+      };
+
+    default:
+      throw new Error(`Invalid phase transition from ${ctx.phase}`);
+  }
+}
+```
+
+### 5.3 Reactor 主循环
+
+```typescript
+// server/agent/reactor.ts
+
+import { AnalysisContext, Phase } from './types';
+import { SSEEmitter } from '../lib/sse';
+import { GitHubClient } from './tools/github-client';
+import { decideNextAction } from './scheduler';
+import { buildReport } from './report-builder';
+
+const MAX_EXECUTION_TIME_MS = 60_000;
+
+export async function runReactor(
+  userId: string,
+  token: string,
+  emitter: SSEEmitter
+): Promise<void> {
+  const client = new GitHubClient(token);
+
+  const ctx: AnalysisContext = {
+    userId,
+    phase: 'INIT',
+    profile: null,
+    repos: [],
+    events: [],
+    stars: [],
+    error: null,
+    startedAt: Date.now(),
   };
-  techProfile: {
-    topLanguages: { name: string; count: number }[];   // Top N 编程语言
-    topDomains: { name: string; count: number }[];       // Top N 技术领域
-    openSourceStyle: {
-      selfBuiltRatio: number;   // 自建仓库占比
-      collaborativeRatio: number; // 参与他人项目占比
-    };
-    preferredTech: string[];    // 偏好技术方向
+
+  try {
+    while (ctx.phase !== 'DONE' && ctx.phase !== 'ERROR') {
+      // Timeout guard
+      if (Date.now() - ctx.startedAt > MAX_EXECUTION_TIME_MS) {
+        await emitter.emit('error', 'Analysis timeout exceeded (60s)');
+        return;
+      }
+
+      const { nextPhase, action } = decideNextAction(ctx);
+
+      await emitter.emit('thinking', getPhaseThinkingMessage(ctx.phase));
+
+      try {
+        await action();
+        ctx.phase = nextPhase;
+
+        await emitter.emit('observation', getPhaseObservation(ctx));
+      } catch (err) {
+        ctx.error = err as GitHubAPIError;
+        ctx.phase = 'ERROR';
+        await handleError(err as GitHubAPIError, emitter);
+        return;
+      }
+    }
+
+    // Build and emit final report
+    if (ctx.phase === 'DONE') {
+      await emitter.emit('final_report', buildReport(ctx));
+    }
+  } catch (err) {
+    ctx.error = err as GitHubAPIError;
+    await handleError(err as GitHubAPIError, emitter);
+  }
+}
+
+function getPhaseThinkingMessage(phase: Phase): string {
+  const messages: Record<Phase, string> = {
+    INIT: 'Initializing analysis...',
+    FETCHING_PROFILE: 'Fetching user profile...',
+    FETCHING_REPOS: 'Fetching repository list...',
+    FETCHING_EVENTS: 'Fetching activity timeline...',
+    FETCHING_STARS: 'Fetching starred repositories...',
+    BUILDING_REPORT: 'Building profile report...',
+    DONE: 'Analysis complete.',
+    ERROR: 'An error occurred.',
   };
-  activeTime: {
-    dayPattern: '工作日' | '周末' | '均衡';
-    hourPattern: '白天' | '深夜' | '均衡';
-    timezone: string;          // UTC 参考
-  };
-  recentActivity: {
-    mainEventTypes: { type: string; count: number }[];
-    topProjects: { name: string; eventCount: number }[];
-    techHotspots: string[];    // 近 90 天关注的技术热点
+  return messages[phase];
+}
+
+function getPhaseObservation(ctx: AnalysisContext): string {
+  switch (ctx.phase) {
+    case 'FETCHING_PROFILE':
+      return ctx.profile ? `Profile loaded: ${ctx.profile.login}` : 'No profile data';
+    case 'FETCHING_REPOS':
+      return `Found ${ctx.repos.length} repositories`;
+    case 'FETCHING_EVENTS':
+      return `Fetched ${ctx.events.length} events`;
+    case 'FETCHING_STARS':
+      return `Fetched ${ctx.stars.length} starred repos`;
+    default:
+      return '';
+  }
+}
+
+async function handleError(
+  err: GitHubAPIError,
+  emitter: SSEEmitter
+): Promise<void> {
+  const userMessage = mapErrorToUserMessage(err);
+  await emitter.emit('error', userMessage);
+}
+
+function mapErrorToUserMessage(err: GitHubAPIError): string {
+  switch (err.status) {
+    case 404:
+      return 'User not found. Please verify the GitHub ID.';
+    case 403:
+      return 'API rate limit exceeded. Please try again later.';
+    default:
+      return `Network error: ${err.message}`;
+  }
+}
+```
+
+---
+
+## 6. SSE 事件流
+
+### 6.1 Emitter 实现
+
+```typescript
+// server/lib/sse.ts
+
+import type { SSEEventType } from '../shared/types';
+
+export class SSEEmitter {
+  private controller: ReadableStreamDefaultController<Uint8Array>;
+  private encoder = new TextEncoder();
+
+  constructor(stream: ReadableStream<Uint8Array>) {
+    this.controller = stream.getReader().controller as ReadableStreamDefaultController<Uint8Array>;
+  }
+
+  async emit(type: SSEEventType, content: string): Promise<void> {
+    const data = JSON.stringify({ type, content, timestamp: Date.now() });
+    const payload = `event: ${type}\ndata: ${data}\n\n`;
+    this.controller.enqueue(this.encoder.encode(payload));
+  }
+
+  close(): void {
+    this.controller.close();
+  }
+}
+
+export function createSSEStream(): {
+  stream: ReadableStream<Uint8Array>;
+  emitter: SSEEmitter;
+} {
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+    cancel() {
+      // Cleanup if needed
+    },
+  });
+
+  return {
+    stream,
+    emitter: new SSEEmitter(stream),
   };
 }
 ```
 
-### 6.2 分析规则（纯代码实现）
+### 6.2 API Handler 集成
 
-#### 编程语言统计
 ```typescript
-function analyzeLanguages(repos: UserRepo[]): LanguageStat[] {
-  const langMap = new Map<string, number>();
+// server/api/analyze.post.ts
+
+import { defineEventHandler, readBody, createError } from 'h3';
+import { runReactor } from '../agent/reactor';
+import { createSSEStream } from '../lib/sse';
+
+export default defineEventHandler(async (event) => {
+  const body = await readBody(event);
+  const { githubId } = body;
+
+  if (!githubId || typeof githubId !== 'string') {
+    throw createError({ statusCode: 400, message: 'githubId is required' });
+  }
+
+  // Validate githubId format (alphanumeric, -)
+  if (!/^[a-zA-Z0-9-]+$/.test(githubId)) {
+    throw createError({ statusCode: 400, message: 'Invalid GitHub ID format' });
+  }
+
+  const { stream, emitter } = createSSEStream();
+
+  // Get token from environment
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) {
+    emitter.emit('error', 'Server configuration error');
+    emitter.close();
+    return;
+  }
+
+  // Run reactor without blocking
+  runReactor(githubId, token, emitter).catch(console.error);
+
+  // Return SSE stream
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
+});
+```
+
+---
+
+## 7. 报告生成器
+
+### 7.1 报告数据结构
+
+```typescript
+// server/agent/report-builder.ts
+
+export interface ProfileReport {
+  basicInfo: BasicInfoSection;
+  techProfile: TechProfileSection;
+  activeTime: ActiveTimeSection;
+  recentActivity: RecentActivitySection;
+}
+
+export interface BasicInfoSection {
+  username: string;
+  avatarUrl: string;
+  id: number;
+  bio: string | null;
+  publicRepos: number;
+  followers: number;
+  following: number;
+}
+
+export interface TechProfileSection {
+  topLanguages: Array<{ name: string; count: number; percentage: number }>;
+  topDomains: Array<{ name: string; count: number }>;
+  openSourceStyle: {
+    selfBuilt: number;       // Own repos count
+    forked: number;           // Forked repos with modifications
+    collaborative: number;   // PRs merged, org memberships
+    selfBuiltRatio: number;  // Percentage
+  };
+  preferredTech: string[];    // Extracted from repo topics + star themes
+}
+
+export interface ActiveTimeSection {
+  dayPattern: 'Weekday' | 'Weekend' | 'Balanced';
+  hourPattern: 'Morning' | 'Afternoon' | 'Evening' | 'Night' | 'Balanced';
+  peakHourUTC: number;
+  weekendRatio: number;
+}
+
+export interface RecentActivitySection {
+  last90DaysEvents: number;
+  eventTypeDistribution: Array<{ type: string; count: number }>;
+  topProjects: Array<{ name: string; eventCount: number }>;
+  techHotspots: string[];
+}
+```
+
+### 7.2 编程语言分析
+
+```typescript
+// server/agent/report-builder.ts
+
+export function analyzeLanguages(repos: GitHubRepo[]): TechProfileSection['topLanguages'] {
+  const langCount = new Map<string, number>();
+
   for (const repo of repos) {
     if (repo.language) {
-      langMap.set(repo.language, (langMap.get(repo.language) || 0) + 1);
+      langCount.set(repo.language, (langCount.get(repo.language) ?? 0) + 1);
     }
   }
-  return Array.from(langMap.entries())
+
+  const total = repos.length;
+  return Array.from(langCount.entries())
+    .map(([name, count]) => ({
+      name,
+      count,
+      percentage: Math.round((count / total) * 100),
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+}
+```
+
+### 7.3 项目领域推断
+
+```typescript
+// server/agent/report-builder.ts
+
+const DOMAIN_KEYWORDS: Record<string, string[]> = Object.freeze({
+  'AI/ML': ['ai', 'ml', 'machine-learning', 'deep-learning', 'llm', 'gpt', 'transformer', 'torch', 'tensorflow', 'pytorch', 'huggingface'],
+  'Web Dev': ['web', 'frontend', 'react', 'vue', 'angular', 'svelte', 'nextjs', 'nuxt', 'css', 'html', 'http', 'rest', 'graphql'],
+  'Backend': ['api', 'server', 'backend', 'express', 'fastify', 'koa', 'django', 'flask', 'rails', 'spring', 'grpc'],
+  'Mobile': ['mobile', 'ios', 'android', 'react-native', 'flutter', 'swift', 'kotlin', 'xamarin'],
+  'DevOps': ['docker', 'kubernetes', 'k8s', 'ci', 'cd', 'deploy', 'terraform', 'ansible', 'helm', 'ingress'],
+  'Cloud': ['aws', 'gcp', 'azure', 'cloud', 'serverless', 'lambda', 'function', 'infrastructure'],
+  'Database': ['database', 'db', 'sql', 'postgresql', 'mysql', 'mongodb', 'redis', 'elasticsearch', 'postgres'],
+  'Tooling': ['cli', 'tool', 'utility', 'script', 'automation', 'parser', 'generator', 'builder'],
+  'Security': ['security', 'crypto', 'cryptography', 'auth', 'oauth', 'jwt', 'ssl', 'tls'],
+  'Data': ['data', 'analytics', 'pipeline', 'etl', 'spark', 'kafka', 'stream', 'batch'],
+});
+
+export function analyzeDomains(repos: GitHubRepo[]): TechProfileSection['topDomains'] {
+  const domainScores = new Map<string, number>();
+
+  for (const repo of repos) {
+    const text = [
+      repo.name,
+      repo.description ?? '',
+      ...repo.topics,
+    ].join(' ').toLowerCase();
+
+    for (const [domain, keywords] of Object.entries(DOMAIN_KEYWORDS)) {
+      const matches = keywords.filter(kw => text.includes(kw)).length;
+      if (matches > 0) {
+        domainScores.set(domain, (domainScores.get(domain) ?? 0) + matches);
+      }
+    }
+  }
+
+  return Array.from(domainScores.entries())
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 5);
 }
 ```
 
-#### 项目领域推断
-```typescript
-function analyzeDomains(repos: UserRepo[]): DomainStat[] {
-  const keywords: Record<string, string[]> = {
-    'AI/ML': ['ai', 'ml', 'machine-learning', 'deep-learning', 'llm', 'gpt', 'transformer', 'torch'],
-    'Web': ['web', 'frontend', 'react', 'vue', 'angular', 'http', 'api', 'ui'],
-    'DevOps': ['docker', 'kubernetes', 'k8s', 'ci', 'cd', 'deploy', 'terraform', 'ansible'],
-    'Infrastructure': ['server', 'cloud', 'aws', 'gcp', 'azure', 'infra', 'config'],
-    'Tooling': ['cli', 'tool', 'utility', 'script', 'automation'],
-  };
+### 7.4 活跃时间分析
 
-  const domainMap = new Map<string, number>();
-  for (const repo of repos) {
-    const text = `${repo.name} ${repo.description || ''} ${repo.topics.join(' ')}`.toLowerCase();
-    for (const [domain, words] of Object.entries(keywords)) {
-      if (words.some(w => text.includes(w))) {
-        domainMap.set(domain, (domainMap.get(domain) || 0) + 1);
-      }
-    }
-  }
-  // ... 类似语言统计的排序返回
-}
-```
-
-#### 活跃时间分析
 ```typescript
-function analyzeActiveTime(events: UserEvent[]): ActiveTimePattern {
-  const hourCount = new Array(24).fill(0);
-  const dayCount = { weekday: 0, weekend: 0 };
+// server/agent/report-builder.ts
+
+type DayPattern = 'Weekday' | 'Weekend' | 'Balanced';
+type HourPattern = 'Morning' | 'Afternoon' | 'Evening' | 'Night' | 'Balanced';
+
+export function analyzeActiveTime(events: GitHubEvent[]): ActiveTimeSection {
+  const hourCounts = new Array(24).fill(0);
+  let weekdayCount = 0;
+  let weekendCount = 0;
 
   for (const event of events) {
     const date = new Date(event.createdAt);
     const hour = date.getUTCHours();
     const day = date.getUTCDay();
-    hourCount[hour]++;
-    if (day === 0 || day === 6) dayCount.weekend++;
-    else dayCount.weekday++;
+
+    hourCounts[hour]++;
+
+    if (day === 0 || day === 6) {
+      weekendCount++;
+    } else {
+      weekdayCount++;
+    }
   }
 
-  const peakHour = hourCount.indexOf(Math.max(...hourCount));
-  const isWeekendHeavy = dayCount.weekend > dayCount.weekday * 0.4;
+  const peakHour = hourCounts.indexOf(Math.max(...hourCounts));
+  const total = weekdayCount + weekendCount;
+  const weekendRatio = total > 0 ? weekendCount / total : 0.5;
 
   return {
-    hourPattern: peakHour >= 22 || peakHour <= 6 ? '深夜' : '白天',
-    dayPattern: isWeekendHeavy ? '周末' : '工作日',
-    timezone: 'UTC',
+    dayPattern: classifyDayPattern(weekendRatio),
+    hourPattern: classifyHourPattern(peakHour),
+    peakHourUTC: peakHour,
+    weekendRatio: Math.round(weekendRatio * 100) / 100,
   };
 }
+
+function classifyDayPattern(weekendRatio: number): DayPattern {
+  if (weekendRatio > 0.6) return 'Weekend';
+  if (weekendRatio < 0.4) return 'Weekday';
+  return 'Balanced';
+}
+
+function classifyHourPattern(peakHour: number): HourPattern {
+  if (peakHour >= 6 && peakHour < 12) return 'Morning';
+  if (peakHour >= 12 && peakHour < 18) return 'Afternoon';
+  if (peakHour >= 18 && peakHour < 22) return 'Evening';
+  return 'Night';
+}
 ```
 
----
-
-## 7. GitHub API 封装
-
-### 7.1 请求封装
+### 7.5 最近动态分析
 
 ```typescript
-// server/lib/github.ts
+// server/agent/report-builder.ts
 
-const GITHUB_API_BASE = 'https://api.github.com';
+const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 
-interface GitHubConfig {
-  token: string;
-}
+export function analyzeRecentActivity(events: GitHubEvent[]): RecentActivitySection {
+  const now = Date.now();
+  const cutoff = now - NINETY_DAYS_MS;
 
-export async function githubFetch<T>(
-  endpoint: string,
-  config: GitHubConfig
-): Promise<T> {
-  const url = `${GITHUB_API_BASE}${endpoint}`;
-  const response = await fetch(url, {
-    headers: {
-      'Authorization': `Bearer ${config.token}`,
-      'Accept': 'application/vnd.github.v3+json',
-      'User-Agent': 'PersonaHub',
-    },
-  });
+  // Filter to last 90 days
+  const recentEvents = events.filter(e => new Date(e.createdAt).getTime() >= cutoff);
 
-  if (!response.ok) {
-    throw new GitHubError(response.status, await response.text());
+  // Event type distribution
+  const typeCount = new Map<string, number>();
+  const projectCount = new Map<string, number>();
+
+  for (const event of recentEvents) {
+    typeCount.set(event.type, (typeCount.get(event.type) ?? 0) + 1);
+    projectCount.set(event.repo.name, (projectCount.get(event.repo.name) ?? 0) + 1);
   }
 
-  return response.json();
+  // Tech hotspots from repo names and topics
+  const hotspots = extractHotspots(recentEvents);
+
+  return {
+    last90DaysEvents: recentEvents.length,
+    eventTypeDistribution: Array.from(typeCount.entries())
+      .map(([type, count]) => ({ type, count }))
+      .sort((a, b) => b.count - a.count),
+    topProjects: Array.from(projectCount.entries())
+      .map(([name, eventCount]) => ({ name, eventCount }))
+      .sort((a, b) => b.eventCount - a.eventCount)
+      .slice(0, 5),
+    techHotspots: hotspots,
+  };
+}
+
+function extractHotspots(events: GitHubEvent[]): string[] {
+  const wordCount = new Map<string, number>();
+  const STOP_WORDS = new Set(['the', 'a', 'an', 'and', 'or', 'to', 'in', 'for', 'of', 'on', 'with', 'by', 'from', 'is']);
+
+  for (const event of events) {
+    const words = event.repo.name.toLowerCase().split(/[-_/]/);
+    for (const word of words) {
+      if (word.length > 2 && !STOP_WORDS.has(word)) {
+        wordCount.set(word, (wordCount.get(word) ?? 0) + 1);
+      }
+    }
+  }
+
+  return Array.from(wordCount.entries())
+    .filter(([, count]) => count >= 3)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([word]) => word);
 }
 ```
 
-### 7.2 错误处理
+### 7.6 报告构建入口
 
 ```typescript
-// server/lib/errors.ts
+// server/agent/report-builder.ts
 
-export class GitHubError extends Error {
-  constructor(
-    public status: number,
-    public message: string
-  ) {
-    super(message);
-  }
+export function buildReport(ctx: AnalysisContext): string {
+  const basicInfo = buildBasicInfo(ctx.profile!);
+  const techProfile = buildTechProfile(ctx.repos, ctx.stars);
+  const activeTime = analyzeActiveTime(ctx.events);
+  const recentActivity = analyzeRecentActivity(ctx.events);
+
+  return formatMarkdown({ basicInfo, techProfile, activeTime, recentActivity });
 }
 
-export const ERROR_MESSAGES: Record<number, string> = {
-  301: '用户已迁移',
-  404: '未找到该 GitHub 用户，请检查 ID 是否正确',
-  403: 'API 配额已用尽，请稍后再试',
-  500: 'GitHub API 服务异常',
-  503: 'GitHub API 服务暂不可用',
-};
-```
-
----
-
-## 8. API 设计
-
-### 8.1 端点
-
-**POST /api/analyze**
-
-请求：
-```json
-{
-  "githubId": "octocat"
+function formatMarkdown(report: ProfileReport): string {
+  // Generate structured Markdown report
+  // (Implementation details for formatting)
+  return `## Basic Info\n\n...`;
 }
 ```
 
-> GitHub Token 在服务端环境变量配置，无需用户输入
+---
 
-响应（SSE 事件流）：
-```
-event: thinking
-data: {"content": "正在获取用户基本信息..."}
+## 8. 前端组件
 
-event: observation
-data: {"content": "获取成功：octocat"}
+### 8.1 组件接口定义
 
-event: thinking
-data: {"content": "正在分析仓库列表..."}
+```typescript
+// src/app/components/SearchBar.tsx
 
-event: observation
-data: {"content": "发现 8 个仓库"}
+interface SearchBarProps {
+  onSearch: (githubId: string) => void;
+  isLoading: boolean;
+}
 
-event: thinking
-data: {"content": "正在分析用户活动记录..."}
+interface ThinkingStreamProps {
+  events: SSEEvent[];
+}
 
-event: observation
-data: {"content": "获取 30 条活动记录"}
-
-event: thinking
-data: {"content": "正在分析 Star 记录..."}
-
-event: observation
-data: {"content": "获取 15 个 Star"}
-
-event: thinking
-data: {"content": "正在生成画像报告..."}
-
-event: final_report
-data: {"content": "## 用户画像报告\n\n### 基本信息\n..."}
-
-event: done
-data: {}
+interface ProfileReportProps {
+  report: string | null;
+}
 ```
 
-### 8.2 错误响应
+### 8.2 SSE 客户端
 
+```typescript
+// src/app/hooks/useAnalysis.ts
+
+import { useState, useCallback, useRef } from 'react';
+import type { SSEEvent } from '../../shared/types';
+
+export function useAnalysis() {
+  const [events, setEvents] = useState<SSEEvent[]>([]);
+  const [report, setReport] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  const startAnalysis = useCallback((githubId: string) => {
+    // Cleanup previous connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
+    setEvents([]);
+    setReport(null);
+    setError(null);
+    setIsLoading(true);
+
+    const eventSource = new EventSource(`/api/analyze?githubId=${encodeURIComponent(githubId)}`);
+    eventSourceRef.current = eventSource;
+
+    eventSource.onmessage = (e) => {
+      const data = JSON.parse(e.data) as SSEEvent;
+
+      if (data.type === 'error') {
+        setError(data.content);
+        setIsLoading(false);
+        eventSource.close();
+        return;
+      }
+
+      if (data.type === 'final_report') {
+        setReport(data.content);
+        setIsLoading(false);
+        eventSource.close();
+        return;
+      }
+
+      if (data.type === 'done') {
+        setIsLoading(false);
+        eventSource.close();
+        return;
+      }
+
+      setEvents(prev => [...prev, data]);
+    };
+
+    eventSource.onerror = () => {
+      setError('Connection error. Please try again.');
+      setIsLoading(false);
+      eventSource.close();
+    };
+  }, []);
+
+  return { events, report, error, isLoading, startAnalysis };
+}
 ```
-event: error
-data: {"content": "未找到该 GitHub 用户，请检查 ID 是否正确"}
-```
-
-### 8.3 异常与边界情况
-
-| 场景 | 产品表现 |
-|------|----------|
-| 用户不存在 | SSE error: "未找到该 GitHub 用户，请检查 ID 是否正确" |
-| 公开数据不足 | 各模块独立分析，能分析多少展示多少，无数据标注"无公开数据" |
-| 网络异常 | SSE error: "网络异常，分析失败，请重试" |
-| 分析超时 | SSE error: "分析超时，请重试" |
-| API 配额用尽 | SSE error: "服务繁忙，请稍后再试" |
 
 ---
 
-## 9. 前端设计
+## 9. 配置与环境变量
 
-### 9.1 组件结构
-
-```
-src/app/components/
-├── SearchBar.tsx       # GitHub ID 输入框 + 开始分析按钮
-├── ThinkingStream.tsx  # 实时流式展示 Agent 思考过程
-└── ProfileReport.tsx   # 画像报告展示（四个模块卡片）
-```
-
-### 9.2 组件说明
-
-**SearchBar**
-- 输入框：GitHub User ID
-- 按钮：开始分析（loading 状态）
-- 状态：idle / loading / error
-
-**ThinkingStream**
-- 实时显示 Agent 思考过程
-- 分类展示：thinking / observation
-- 每个条目带图标和时间戳
-- 自动滚动到底部
-
-**ProfileReport**
-- 展示最终生成的画像报告
-- 四个模块卡片：基本信息、技术画像、活跃时间、最近动态
-- 支持复制报告内容
-
----
-
-## 10. 环境变量
+### 9.1 环境变量
 
 ```bash
 # .env
-NITRO_PORT=3000
-GITHUB_TOKEN=ghp_xxxx  # GitHub Personal Access Token，服务端使用
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx  # Required: GitHub PAT
+NITRO_PORT=3000                         # Optional: default 3000
+```
+
+### 9.2 GitHub Token 权限要求
+
+最小权限范围：
+- `read:user` — 读取用户基本信息
+- `public_repo` — 读取公开仓库、事件、stars
+
+---
+
+## 10. 错误处理策略
+
+### 10.1 错误分类
+
+| 错误类型 | HTTP 状态码 | 用户消息 | 处理策略 |
+|----------|-------------|----------|----------|
+| 用户不存在 | 404 | "未找到该 GitHub 用户" | 直接返回 |
+| API 限流 | 403 | "服务繁忙，请稍后再试" | 等待后重试 |
+| 网络错误 | 网络层 | "网络异常，请检查网络" | 重试 2 次 |
+| 分析超时 | N/A | "分析超时，请重试" | 强制终止 |
+| 服务端错误 | 500 | "服务异常，请稍后再试" | 记录日志 |
+
+### 10.2 重试策略
+
+```typescript
+// Exponential backoff with jitter
+const retryDelay = Math.min(1000 * Math.pow(2, attempt), 30000);
+const jitter = Math.random() * 1000;
+await sleep(retryDelay + jitter);
 ```
 
 ---
 
-## 11. 实现计划
+## 11. 性能考量
 
-| Phase | 内容 | 交付物 |
-|-------|------|--------|
-| 1 | 项目初始化 | VitePlus + React + Nitro 项目，TypeScript 配置 |
-| 2 | GitHub API 封装 | 5 个工具函数，错误处理 |
-| 3 | ReAct Agent 核心 | 状态机、ReAct 循环、流式输出 |
-| 4 | 报告生成器 | 结构化报告拼接（语言/领域/时间/热点分析） |
-| 5 | 后端 API | POST /api/analyze 端点 |
-| 6 | 前端界面 | SearchBar、ThinkingStream、ProfileReport |
-| 7 | 联调与边界处理 | 完整流程测试、异常场景处理 |
-| 8 | 部署 | Vercel / Railway / Cloudflare |
+### 11.1 API 调用优化
 
----
+- **并行请求**：Profile/Repos/Events/Stars 可并行获取的场景（需评估 GitHub 限流策略）
+- **分页限制**：单次最多获取 500 条记录（5 页 × 100）
+- **数据缓存**：同一请求内不缓存，依赖 GitHub 内部缓存
 
-## 12. 验收标准
+### 11.2 内存管理
 
-### 12.1 功能验收
-
-- [ ] 输入任意有效 GitHub 用户 ID，能返回画像报告
-- [ ] 报告包含"基本信息、技术画像、活跃时间、最近动态"四个模块
-- [ ] 输入不存在用户 ID，给出明确提示
-- [ ] 网络异常时，给出"网络异常，分析失败，请重试"提示
-- [ ] 分析超时，给出"分析超时，请重试"提示
-- [ ] API 配额用尽时，给出"服务繁忙，请稍后再试"提示
-- [ ] 分析过程在界面上实时展示
-
-### 12.2 体验验收
-
-- [ ] 分析过程有合理超时保护
-- [ ] 界面在分析过程中无卡顿
-- [ ] 错误提示清晰，用户知道如何解决
-
-### 12.3 边界情况验收
-
-- [ ] 用户存在但公开数据不足时，各模块独立分析，能分析多少展示多少
-- [ ] API 限流时优雅报错，不出现崩溃
-- [ ] 重复提交分析请求时正确处理
+- **流式处理**：SSE 边收边发，不积累大对象
+- **状态清理**：Reactor 完成后立即释放上下文引用
+- **事件数组上限**：单用户最多处理 10000 条事件，超出截断
 
 ---
 
-## 13. 参考文档
+## 12. 部署配置
 
-- [VitePlus 文档](https://viteplus.dev/guide/)
-- [Nitro 文档](https://nitro.unjs.io/)
-- [GitHub REST API](https://docs.github.com/en/rest)
+### 12.1 Vercel
+
+```json
+// vercel.json
+{
+  "builds": [{ "src": "package.json", "use": "@vercel/nitro" }],
+  "routes": [{ "src": "/api/(.*)", "dest": "/api/analyze" }]
+}
+```
+
+### 12.2 Cloudflare Workers
+
+Nitro Cloudflare preset 支持零配置部署：
+```bash
+# nitro.config.ts
+export default defineNitroConfig({
+  preset: 'cloudflare-pages'
+});
+```
+
+---
+
+## 13. 目录结构约定
+
+| 目录 | 内容 |
+|------|------|
+| `src/app/` | VitePlus 前端入口 |
+| `src/server/agent/` | ReAct Agent 核心逻辑 |
+| `src/server/agent/tools/` | GitHub API 工具集 |
+| `src/server/lib/` | 服务端工具库 |
+| `src/shared/` | 跨端类型定义 |
