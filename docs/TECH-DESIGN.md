@@ -47,7 +47,7 @@ personahub/
 │   │
 │   ├── server/                      # Nitro 服务端
 │   │   ├── api/
-│   │   │   └── analyze.post.ts     # POST /api/analyze
+│   │   │   └── analyze.get.ts      # GET /api/analyze
 │   │   │
 │   │   ├── agent/
 │   │   │   ├── index.ts            # Agent Facade（导出 runAgent）
@@ -620,8 +620,8 @@ function formatObservation(ctx: AnalysisContext): string {
 }
 
 function mapErrorToUserMessage(err: Error): string {
-  if (err instanceof GitHubClient) {
-    switch ((err as unknown as { status: number }).status) {
+  if (err instanceof GitHubError) {
+    switch (err.status) {
       case 404:
         return 'User not found. Please verify the GitHub ID.';
       case 403:
@@ -698,24 +698,24 @@ export function createSSEStream(): {
 ### 8.2 API Handler
 
 ```typescript
-// server/api/analyze.post.ts
+// server/api/analyze.get.ts
 
-import { defineEventHandler, readBody, createError, sendStream } from 'h3';
+import { defineEventHandler, getQuery, createError, sendStream } from 'h3';
 import { runReactor } from '../agent/reactor';
 import { createSSEStream } from '../lib/sse';
 
 const GITHUB_ID_PATTERN = /^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/;
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody(event);
+  const { githubId } = getQuery(event);
 
-  if (!body?.githubId || typeof body.githubId !== 'string') {
+  if (!githubId || typeof githubId !== 'string') {
     throw createError({ statusCode: 400, message: 'githubId is required' });
   }
 
-  const githubId = body.githubId.trim();
+  const id = githubId.trim();
 
-  if (!GITHUB_ID_PATTERN.test(githubId)) {
+  if (!GITHUB_ID_PATTERN.test(id)) {
     throw createError({ statusCode: 400, message: 'Invalid GitHub ID format' });
   }
 
@@ -727,7 +727,7 @@ export default defineEventHandler(async (event) => {
   const { stream, emitter } = createSSEStream();
 
   // 异步执行，不阻塞响应
-  runReactor(githubId, token, emitter).catch(err => {
+  runReactor(id, token, emitter).catch(err => {
     console.error('[PersonaHub] Reactor error:', err);
     emitter.emit('error', 'Internal server error').catch(() => {});
   });
@@ -955,7 +955,7 @@ function classifyDayPattern(weekendRatio: number): DayPattern {
 }
 
 function classifyHourPattern(hourCounts: number[]): HourPattern {
-  const [morning, afternoon, evening, night] = [0, 0, 0, 0];
+  let morning = 0, afternoon = 0, evening = 0, night = 0;
 
   for (let h = 0; h < 24; h++) {
     const count = hourCounts[h];
@@ -966,12 +966,13 @@ function classifyHourPattern(hourCounts: number[]): HourPattern {
   }
 
   const total = morning + afternoon + evening + night || 1;
-  const maxRatio = Math.max(morning, afternoon, evening, night) / total;
+  const maxVal = Math.max(morning, afternoon, evening, night);
+  const maxRatio = maxVal / total;
 
   if (maxRatio < 0.35) return 'Balanced';
-  if (morning === Math.max(morning, afternoon, evening, night)) return 'Morning';
-  if (afternoon === Math.max(morning, afternoon, evening, night)) return 'Afternoon';
-  if (evening === Math.max(morning, afternoon, evening, night)) return 'Evening';
+  if (morning === maxVal) return 'Morning';
+  if (afternoon === maxVal) return 'Afternoon';
+  if (evening === maxVal) return 'Evening';
   return 'Night';
 }
 ```
@@ -1208,8 +1209,7 @@ export function useAnalysis(): UseAnalysisReturn {
     setError(null);
     setIsLoading(true);
 
-    const url = `/api/analyze?githubId=${encodeURIComponent(githubId)}`;
-    const eventSource = new EventSource(url);
+    const eventSource = new EventSource(`/api/analyze?githubId=${encodeURIComponent(githubId)}`);
     eventSourceRef.current = eventSource;
 
     eventSource.onmessage = (e: MessageEvent) => {
@@ -1467,9 +1467,7 @@ export default defineNitroConfig({
   routeRules: {
     '/api/**': {
       cors: true,
-      headers: {
-        'Cache-Control': 'no-cache',
-      },
+      cacheControl: false,
     },
   },
 });
