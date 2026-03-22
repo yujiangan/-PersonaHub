@@ -95,9 +95,6 @@
 
 ### 5.3 活跃时间
 - 主要活跃时段（工作日/周末、白天/深夜，以 UTC 时间为参考）
-- 活跃度趋势：基于 GitHub Events API（Push/PullRequestEvent/IssuesEvent/IssueCommentEvent/CreateEvent），统计本月与上月得分，得出"活跃上升 / 保持稳定 / 近期较不活跃"的定性判断；Events 数据不足 30 条则标注"数据不足，无法判断"
-
-- 评分规则：PushEvent +1、PullRequestEvent +1、IssuesEvent +1、IssueCommentEvent +0.5、CreateEvent +0.5；本月 > 上月 20% 以上为上升，反之为下降，差距 20% 以内为稳定。
 
 ### 5.4 最近动态
 - 近 90 天主要活动类型（提交、PR、Issue、Star 等）
