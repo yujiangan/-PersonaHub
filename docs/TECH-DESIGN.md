@@ -293,6 +293,8 @@ while (phase !== 'DONE' && phase !== 'ERROR') {
 - 协作仓库 = `fork === true` 的仓库数
 - 自建比例 = 自建仓库数 / 总仓库数（百分比）
 
+> **口径说明**：本期使用 `fork` 字段做近似估算，fork === true 仅表示该仓库是从他人项目复制而来，不严格识别真实协作行为（如 fork 后有提交记录或加入了 Organization）。
+
 详见 `src/server/agent/report-builder.ts` 中的 `analyzeLanguages` / `analyzeOpenSourceStyle`。
 
 ### 4.4 Scheduler（伪代码）
