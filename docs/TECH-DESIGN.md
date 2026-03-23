@@ -100,7 +100,37 @@ personahub/
 
 ## 4. 系统架构
 
-### 4.1 数据流
+### 4.1 ReAct 主循环（伪代码）
+
+```typescript
+while (phase !== 'DONE' && phase !== 'ERROR') {
+  emitter.emit('thinking', PHASE_MESSAGES[phase]);
+
+  if (phase === 'BUILDING_REPORT') {
+    emitter.emit('final_report', buildReport(ctx));
+    emitter.emit('done', '');
+    break;
+  }
+
+  const { nextPhase, execute } = schedule(ctx, client);
+
+  try {
+    await execute();
+    phase = nextPhase;
+    emitter.emit('observation', formatObservation(ctx));
+  } catch (err) {
+    ctx.error = err as GitHubError;                    // 记录错误，但不中断
+    emitter.emit('error', mapErrorToUserMessage(err as Error)); // 降级继续
+  }
+}
+```
+
+**关键设计**：
+- 任一模块失败只记录 `ctx.error`，后续模块继续执行（降级策略）
+- `final_report` 后发送 `done` 事件形成闭环
+- 详见 `src/server/agent/reactor.ts`
+
+### 4.2 数据流
 
 ```
 用户输入 GitHub ID
@@ -135,7 +165,28 @@ personahub/
         SSE 推送到前端
 ```
 
-### 4.2 Agent 阶段定义
+### 4.4 Scheduler（伪代码）
+
+```typescript
+function schedule(ctx: AnalysisContext, client: GitHubClient): SchedulerOutput {
+  switch (ctx.phase) {
+    case 'INIT':
+      return { nextPhase: 'FETCHING_PROFILE', execute: () => { ctx.profile = await getUserProfile(client, ctx.userId); } };
+    case 'FETCHING_PROFILE':
+      return { nextPhase: 'FETCHING_REPOS', execute: () => { ctx.repos = await getUserRepos(client, ctx.userId); } };
+    case 'FETCHING_REPOS':
+      return { nextPhase: 'FETCHING_EVENTS', execute: () => { ctx.events = await getUserEvents(client, ctx.userId); } };
+    case 'FETCHING_EVENTS':
+      return { nextPhase: 'FETCHING_STARS', execute: () => { ctx.stars = await getUserStars(client, ctx.userId); } };
+    case 'FETCHING_STARS':
+      return { nextPhase: 'BUILDING_REPORT', execute: () => {} }; // 报告构建在 reactor 中调用
+  }
+}
+```
+
+状态转移固定顺序，详见 `src/server/agent/scheduler.ts`。
+
+### 4.5 Agent 阶段定义
 
 | Phase | 说明 | 出错策略 |
 |-------|------|----------|
@@ -154,17 +205,19 @@ personahub/
 
 ## 5. SSE 协议
 
-### 5.1 服务端发送格式
+### 5.1 服务端发送格式（伪代码）
 
-每个事件发送两条 SSE 行：
+```typescript
+async emit(type: SSEEvent['type'], content: string): void {
+  const event: SSEEvent = { type, content, timestamp: Date.now() };
+  // SSE 协议：event: <type>\ndata: <json>\n\n
+  controller.enqueue(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+}
 ```
-event: <type>
-data: <JSON(SSEEvent)>
-```
 
-其中 `type` 可为 `thinking` / `observation` / `final_report` / `error` / `done`。
+每个事件发送命名 SSE 事件，详见 `src/server/lib/sse.ts`。
 
-### 5.2 前端接收方式
+### 5.3 前端接收方式
 
 前端必须使用 `addEventListener` 监听命名事件，不能使用 `onmessage`：
 
@@ -179,9 +232,28 @@ eventSource.addEventListener('error', (e) => { /* ... */ });
 
 ---
 
-## 6. GitHub API 调用
+## 6. 错误处理（伪代码）
 
-### 6.1 工具函数
+```typescript
+function mapErrorToUserMessage(err: Error): string {
+  if (err instanceof GitHubError) {
+    switch (err.status) {
+      case 404: return '用户不存在，请检查 GitHub ID 是否正确。';
+      case 403: return 'API 请求频率超限，请稍后再试。';
+      default:  return `网络异常：${err.message}`;
+    }
+  }
+  return '网络异常，分析失败，请重试。';
+}
+```
+
+详见 `src/server/agent/reactor.ts`。
+
+---
+
+## 7. GitHub API 调用
+
+### 7.1 工具函数
 
 | 函数 | 调用的 GitHub API |
 |------|-------------------|
@@ -192,7 +264,7 @@ eventSource.addEventListener('error', (e) => { /* ... */ });
 
 详见 `src/server/agent/tools/`
 
-### 6.2 错误处理
+### 7.2 错误处理
 
 | HTTP 状态 | 用户消息 |
 |-----------|----------|
@@ -205,7 +277,7 @@ eventSource.addEventListener('error', (e) => { /* ... */ });
 
 ---
 
-## 7. 错误分类与响应
+## 8. 错误分类与响应
 
 | 错误类型 | 触发条件 | 用户消息 | HTTP 状态码 |
 |----------|----------|----------|-------------|
@@ -219,7 +291,7 @@ eventSource.addEventListener('error', (e) => { /* ... */ });
 
 ---
 
-## 8. 前端组件
+## 9. 前端组件
 
 | 组件 | 职责 |
 |------|------|
@@ -231,7 +303,7 @@ eventSource.addEventListener('error', (e) => { /* ... */ });
 
 ---
 
-## 9. 配置文件
+## 10. 配置文件
 
 | 文件 | 说明 |
 |------|------|
@@ -242,7 +314,7 @@ eventSource.addEventListener('error', (e) => { /* ... */ });
 
 ---
 
-## 10. 性能与资源
+## 11. 性能与资源
 
 - **分页上限**：单用户最多获取 5000 条事件（10 页 × 100 条）
 - **超时控制**：单次 fetch 超时 10s，全流程超时 60s
@@ -251,9 +323,9 @@ eventSource.addEventListener('error', (e) => { /* ... */ });
 
 ---
 
-## 11. 部署
+## 12. 部署
 
-### 11.1 环境变量
+### 12.1 环境变量
 
 ```
 GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
@@ -261,13 +333,13 @@ GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 
 **Token 权限要求**：`read:user` + `public_repo`
 
-### 11.2 部署平台
+### 12.2 部署平台
 
 推荐 Vercel（通过 `@vercel/nitro` preset），详见 `nitro.config.ts`。
 
 ---
 
-## 12. 实现索引
+## 13. 实现索引
 
 | 设计点 | 源文件 |
 |--------|--------|
