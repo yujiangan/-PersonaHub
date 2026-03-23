@@ -144,10 +144,21 @@ interface SSEEvent {
 | type | 触发时机 | content 示例 |
 |------|----------|-------------|
 | `thinking` | 每个 Phase 开始时 | "正在获取用户资料..." |
-| `observation` | 每个 Phase 执行成功后 | "已获取 20 个仓库" 或 "无公开数据" |
+| `observation` | 每个 Phase 执行成功后 | 见下方摘要结构 |
 | `final_report` | 报告生成完成后 | Markdown 报告全文 |
 | `error` | 任意阶段出错时 | 用户可见的中文错误提示 |
 | `done` | 流结束前 | 空字符串 |
+
+**observation content 摘要结构**（`formatObservation`）：
+
+| Phase | content 示例 |
+|-------|-------------|
+| FETCHING_PROFILE | "已加载用户资料：{login}" 或 "无用户资料数据" |
+| FETCHING_REPOS | "已获取 {n} 个仓库"（n=0 时仍发送） |
+| FETCHING_EVENTS | "已获取 {n} 条事件"（n=0 时仍发送） |
+| FETCHING_STARS | "已获取 {n} 个 Starred 仓库"（n=0 时仍发送） |
+
+注：数据为空（如 repos=[]）属于「调用成功」，仍发送 observation；「调用失败」才发送 error。
 
 ### 3.3 Agent 核心类型
 
@@ -274,6 +285,15 @@ while (phase !== 'DONE' && phase !== 'ERROR') {
 **90 天时间范围**：在 `analyzeRecentActivity` 中以 `Date.now() - 90 * 24 * 60 * 60 * 1000` 为截止时间过滤 events。
 
 **「无公开数据」处理**：任一维度数据为空时（如 events=[]），该维度在报告中标注"无公开数据"，不显示为空或报错。
+
+**编程语言 Top N**：统计所有 repos 中 `language` 字段的出现频率，按降序取前 5，百分比 = 该语言仓库数 / 有语言标注的仓库总数。
+
+**开源风格计算**：
+- 自建仓库 = `fork === false` 的仓库数
+- 协作仓库 = `fork === true` 的仓库数
+- 自建比例 = 自建仓库数 / 总仓库数（百分比）
+
+详见 `src/server/agent/report-builder.ts` 中的 `analyzeLanguages` / `analyzeOpenSourceStyle`。
 
 ### 4.4 Scheduler（伪代码）
 
@@ -408,7 +428,27 @@ async function fetchAllPages(client, baseEndpoint, maxPages = 5, perPage = 100) 
 
 详见 `src/server/agent/tools/github.ts` 中的 `fetchAllPages`。
 
-### 7.2 错误处理
+**GitHubClient 单次请求超时（10s）**：使用 `AbortController` + `setTimeout` 实现，超时后抛出 `GitHubError(408, endpoint, 'Request timeout')`。
+
+**GitHubClient 重试策略**：对 403/500/502/503 错误进行指数退避重试（最多 2 次），退避间隔 500ms → 2000ms。
+
+**GitHubClient 核心方法**：
+
+```typescript
+class GitHubClient {
+  constructor(private readonly token: string) {}
+
+  async fetch<T>(endpoint: string): Promise<T> {
+    // 重试逻辑：403/500/502/503 可重试，指数退避最多 2 次
+  }
+
+  private async doFetch<T>(endpoint: string): Promise<T> {
+    // 单次请求：AbortController 超时 10s，GitHub API 错误映射为 GitHubError
+  }
+}
+```
+
+详见 `src/server/agent/tools/github.ts`。
 
 **两种 403 场景的区分**：
 
@@ -458,12 +498,31 @@ async function fetchAllPages(client, baseEndpoint, maxPages = 5, perPage = 100) 
 
 ## 10. 配置文件
 
-| 文件 | 说明 |
-|------|------|
-| `package.json` | 依赖声明、脚本命令 |
-| `vite.config.ts` | Vite 构建配置、API 代理 |
-| `nitro.config.ts` | Nitro 服务端配置 |
-| `tsconfig.json` | TypeScript 配置 |
+### 10.1 vite.config.ts
+
+- 开发服务器代理 `/api` 请求到 `http://localhost:3000`（Nitro 服务）
+- 使用 `@vitejs/plugin-react` 支持 React JSX
+- 使用 `viteplus` 插件
+
+### 10.2 nitro.config.ts
+
+- `preset: 'node-server'`（开发）、`'vercel'`（生产）
+- `routeRules: '/api/**': { cors: true, cacheControl: false }`
+
+### 10.3 本地开发
+
+```bash
+# 终端 1：启动前端（Vite）
+npm run dev
+
+# 终端 2：启动后端（Nitro）
+npm run dev:server
+
+# .env.local
+GITHUB_TOKEN=ghp_your_token_here
+```
+
+详见 `vite.config.ts`、`nitro.config.ts`。
 
 ---
 
@@ -471,7 +530,9 @@ async function fetchAllPages(client, baseEndpoint, maxPages = 5, perPage = 100) 
 
 - **分页上限**：单用户最多获取 1000 条事件（10 页 × 100 条），分页终止条件为遇空页即停
 - **超时控制**：单次 fetch 超时 10s（`REQUEST_TIMEOUT_MS`），全流程超时 60s（`MAX_EXECUTION_MS`），超时后在 ReAct 循环中检测并发送 error 事件后进入 ERROR 阶段
-- **并发控制**：服务端不对并发请求做额外限制，完全依赖 GitHub API 速率限制（5000 req/hour）；用户重复点击时前端关闭旧 `EventSource` 再创建新连接
+- **并发控制**：服务端不对并发请求做额外限制，完全依赖 GitHub API 速率限制（5000 req/hour）
+- **重复提交处理**：用户点击「分析」时，前端先调用 `eventSource.close()` 关闭旧连接，再创建新连接，避免多流同时推送
+- **前端防抖**：用户点击后禁用按钮，直到分析完成或出错后才重新启用
 - **内存管理**：SSE 流式处理不积累大数据；`AnalysisContext` 在 `runReactor` 返回后由 GC 回收
 
 ---
@@ -494,13 +555,13 @@ GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 
 ## 13. 实现索引
 
-| 设计点 | 源文件 |
-|--------|--------|
-| SSE Emitter | `src/server/lib/sse.ts` |
-| ReAct 主循环 | `src/server/agent/reactor.ts` |
-| 状态调度器 | `src/server/agent/scheduler.ts` |
-| 报告生成器 | `src/server/agent/report-builder.ts` |
-| GitHubClient | `src/server/agent/tools/github.ts` |
-| API 入口 | `src/server/api/analyze.get.ts` |
-| 前端 SSE Hook | `src/app/hooks/useAnalysis.ts` |
-| 共享类型 | `src/shared/types.ts` |
+| 设计点 | 源文件 | 关键导出 |
+|--------|--------|----------|
+| SSE Emitter | `src/server/lib/sse.ts` | `SSEEmitter.emit()`, `createSSEStream()` |
+| ReAct 主循环 | `src/server/agent/reactor.ts` | `runReactor()` |
+| 状态调度器 | `src/server/agent/scheduler.ts` | `schedule()` |
+| 报告生成器 | `src/server/agent/report-builder.ts` | `buildReport()`, `analyzeLanguages()`, `analyzeOpenSourceStyle()`, `analyzeActiveTime()`, `analyzeRecentActivity()` |
+| GitHubClient | `src/server/agent/tools/github.ts` | `GitHubClient.fetch()`, `fetchAllPages()` |
+| API 入口 | `src/server/api/analyze.get.ts` | — |
+| 前端 SSE Hook | `src/app/hooks/useAnalysis.ts` | `useAnalysis()` |
+| 共享类型 | `src/shared/types.ts` | `GitHubUser`, `GitHubRepo`, `GitHubEvent`, `SSEEvent`, `Phase`, `AnalysisContext` |
