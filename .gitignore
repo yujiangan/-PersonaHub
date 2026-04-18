@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.output/
+.nitro/
+
+# Environment (sensitive)
+.env
+
+# Vite+ hooks (auto-generated)
+.vite-hooks/
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Cache
+*.tsbuildinfo
+.vite/
