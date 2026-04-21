@@ -1,4 +1,4 @@
-import { GitHubClient, GitHubError } from './github';
+import { GitHubClient, GitHubError } from "./github";
 
 interface FetchAllPagesOptions {
   maxPages?: number;
@@ -8,10 +8,10 @@ interface FetchAllPagesOptions {
 export async function fetchAllPages(
   client: GitHubClient,
   baseEndpoint: string,
-  options: FetchAllPagesOptions = {}
+  options: FetchAllPagesOptions = {},
 ): Promise<unknown[]> {
   const { maxPages = 5, perPage = 100 } = options;
-  const separator = baseEndpoint.includes('?') ? '&' : '?';
+  const separator = baseEndpoint.includes("?") ? "&" : "?";
 
   const pageUrls = Array.from({ length: maxPages }, (_, i) => {
     const page = i + 1;
@@ -31,7 +31,7 @@ export async function fetchAllPages(
         }
         throw err;
       }
-    })
+    }),
   );
 
   const results: unknown[] = [];

@@ -1,6 +1,14 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from "react";
 
-export type SSEEventType = 'thinking' | 'tool_start' | 'tool_end' | 'observation' | 'step' | 'final_report' | 'error' | 'done';
+export type SSEEventType =
+  | "thinking"
+  | "tool_start"
+  | "tool_end"
+  | "observation"
+  | "step"
+  | "final_report"
+  | "error"
+  | "done";
 
 export interface AgentEvent {
   id: string;
@@ -37,7 +45,7 @@ interface SSEWrapper {
 
 const initialState: AnalysisState = {
   events: [],
-  finalReport: '',
+  finalReport: "",
   isGeneratingReport: false,
   isDone: false,
   error: null,
@@ -77,152 +85,167 @@ export function useAnalysis(githubId: string | null) {
     setState({ ...initialState, observationsByTool: {} });
   }, []);
 
-  const connect = useCallback((id: string) => {
-    if (isConnectingRef.current) return;
-    isConnectingRef.current = true;
+  const connect = useCallback(
+    (id: string) => {
+      if (isConnectingRef.current) return;
+      isConnectingRef.current = true;
 
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-    }
-
-    resetState();
-
-    const eventSource = new EventSource(`/api/analyze?githubId=${encodeURIComponent(id)}`);
-    eventSourceRef.current = eventSource;
-
-    eventSource.addEventListener('thinking', (e) => {
-      const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
-      if (!wrapper) return;
-      const content = wrapper.content as string;
-      const isGenerating = content.includes('正在生成洞察') || content.includes('正在生成分析');
-      const event: AgentEvent = {
-        id: generateEventId(),
-        type: 'thinking',
-        timestamp: wrapper.timestamp,
-        content,
-      };
-      // Only update isGeneratingReport if we haven't received final_report yet
-      if (!hasReceivedFinalReportRef.current) {
-        setState(prev => ({ ...prev, events: [...prev.events, event], isGeneratingReport: isGenerating || prev.isGeneratingReport }));
-      } else {
-        setState(prev => ({ ...prev, events: [...prev.events, event] }));
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
       }
-    });
 
-    eventSource.addEventListener('tool_start', (e) => {
-      const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
-      if (!wrapper) return;
-      const toolData = safeParseJSON<Record<string, unknown>>(wrapper.content, {});
-      const toolCallId = toolData.toolCallId as string | undefined;
-      const event: AgentEvent = {
-        id: generateEventId(),
-        type: 'tool_start',
-        timestamp: wrapper.timestamp,
-        toolCallId,
-        toolName: toolData.toolName as string | undefined,
-        toolInput: toolData.input as Record<string, unknown> | undefined,
-      };
-      // Store in pending map and update current tool
-      if (toolCallId) {
-        pendingToolsRef.current.set(toolCallId, event);
-        currentToolCallIdRef.current = toolCallId;
-      }
-      setState(prev => ({ ...prev, events: [...prev.events, event] }));
-    });
+      resetState();
 
-    eventSource.addEventListener('tool_end', (e) => {
-      const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
-      if (!wrapper) return;
-      const toolData = safeParseJSON<Record<string, unknown>>(wrapper.content, {});
-      const toolCallId = toolData.toolCallId as string | undefined;
-      setState(prev => {
-        // Remove tool_start event if it exists
-        const newEvents = toolCallId
-          ? prev.events.filter(ev => !(ev.type === 'tool_start' && ev.toolCallId === toolCallId))
-          : prev.events;
-        // Remove from pending map
-        if (toolCallId) {
-          pendingToolsRef.current.delete(toolCallId);
+      const eventSource = new EventSource(`/api/analyze?githubId=${encodeURIComponent(id)}`);
+      eventSourceRef.current = eventSource;
+
+      eventSource.addEventListener("thinking", (e) => {
+        const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
+        if (!wrapper) return;
+        const content = wrapper.content as string;
+        const isGenerating = content.includes("正在生成洞察") || content.includes("正在生成分析");
+        // 如果是生成报告的提示，只触发 isGeneratingReport，不显示 thinking 卡片
+        if (isGenerating) {
+          if (!hasReceivedFinalReportRef.current) {
+            setState((prev) => ({ ...prev, isGeneratingReport: true }));
+          }
+          return;
         }
         const event: AgentEvent = {
           id: generateEventId(),
-          type: 'tool_end',
+          type: "thinking",
+          timestamp: wrapper.timestamp,
+          content,
+        };
+        // Only update isGeneratingReport if we haven't received final_report yet
+        if (!hasReceivedFinalReportRef.current) {
+          setState((prev) => ({
+            ...prev,
+            events: [...prev.events, event],
+            isGeneratingReport: isGenerating || prev.isGeneratingReport,
+          }));
+        } else {
+          setState((prev) => ({ ...prev, events: [...prev.events, event] }));
+        }
+      });
+
+      eventSource.addEventListener("tool_start", (e) => {
+        const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
+        if (!wrapper) return;
+        const toolData = safeParseJSON<Record<string, unknown>>(wrapper.content, {});
+        const toolCallId = toolData.toolCallId as string | undefined;
+        const event: AgentEvent = {
+          id: generateEventId(),
+          type: "tool_start",
           timestamp: wrapper.timestamp,
           toolCallId,
           toolName: toolData.toolName as string | undefined,
-          toolSuccess: toolData.toolSuccess as boolean | undefined,
-          toolResult: toolData.toolResult as unknown,
-          toolSummary: toolData.toolSummary as string | undefined,
-          toolError: toolData.toolError as string | null | undefined,
+          toolInput: toolData.input as Record<string, unknown> | undefined,
         };
-        return {
-          ...prev,
-          events: [...newEvents, event],
-        };
-      });
-    });
-
-    eventSource.addEventListener('observation', (e) => {
-      const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
-      if (!wrapper) return;
-      // Parse the content to extract toolCallId and content
-      const obsData = safeParseJSON<{ content: string; toolCallId?: string }>(wrapper.content, { content: wrapper.content as string });
-      const event: AgentEvent = {
-        id: generateEventId(),
-        type: 'observation',
-        timestamp: wrapper.timestamp,
-        content: obsData.content,
-        toolCallId: obsData.toolCallId || currentToolCallIdRef.current || undefined,
-      };
-      const toolId = event.toolCallId;
-      setState(prev => {
-        const newObservationsByTool = { ...prev.observationsByTool };
-        if (toolId) {
-          newObservationsByTool[toolId] = [
-            ...(newObservationsByTool[toolId] || []),
-            event
-          ];
+        // Store in pending map and update current tool
+        if (toolCallId) {
+          pendingToolsRef.current.set(toolCallId, event);
+          currentToolCallIdRef.current = toolCallId;
         }
-        return {
-          ...prev,
-          events: [...prev.events, event],
-          observationsByTool: newObservationsByTool
-        };
+        setState((prev) => ({ ...prev, events: [...prev.events, event] }));
       });
-    });
 
-    eventSource.addEventListener('step', (e) => {
-      const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
-      if (!wrapper) return;
-      const event: AgentEvent = {
-        id: generateEventId(),
-        type: 'step',
-        timestamp: wrapper.timestamp,
-        content: wrapper.content as string,
-      };
-      setState(prev => ({ ...prev, events: [...prev.events, event] }));
-    });
+      eventSource.addEventListener("tool_end", (e) => {
+        const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
+        if (!wrapper) return;
+        const toolData = safeParseJSON<Record<string, unknown>>(wrapper.content, {});
+        const toolCallId = toolData.toolCallId as string | undefined;
+        setState((prev) => {
+          // Remove tool_start event if it exists
+          const newEvents = toolCallId
+            ? prev.events.filter(
+                (ev) => !(ev.type === "tool_start" && ev.toolCallId === toolCallId),
+              )
+            : prev.events;
+          // Remove from pending map
+          if (toolCallId) {
+            pendingToolsRef.current.delete(toolCallId);
+          }
+          const event: AgentEvent = {
+            id: generateEventId(),
+            type: "tool_end",
+            timestamp: wrapper.timestamp,
+            toolCallId,
+            toolName: toolData.toolName as string | undefined,
+            toolSuccess: toolData.toolSuccess as boolean | undefined,
+            toolResult: toolData.toolResult as unknown,
+            toolSummary: toolData.toolSummary as string | undefined,
+            toolError: toolData.toolError as string | null | undefined,
+          };
+          return {
+            ...prev,
+            events: [...newEvents, event],
+          };
+        });
+      });
 
-    eventSource.addEventListener('final_report', (e) => {
-      const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
-      if (!wrapper) return;
-      hasReceivedFinalReportRef.current = true;
-      setState(prev => ({ ...prev, finalReport: wrapper.content, isGeneratingReport: false }));
-    });
+      eventSource.addEventListener("observation", (e) => {
+        const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
+        if (!wrapper) return;
+        // Parse the content to extract toolCallId and content
+        const obsData = safeParseJSON<{ content: string; toolCallId?: string }>(wrapper.content, {
+          content: wrapper.content as string,
+        });
+        const event: AgentEvent = {
+          id: generateEventId(),
+          type: "observation",
+          timestamp: wrapper.timestamp,
+          content: obsData.content,
+          toolCallId: obsData.toolCallId || currentToolCallIdRef.current || undefined,
+        };
+        const toolId = event.toolCallId;
+        setState((prev) => {
+          const newObservationsByTool = { ...prev.observationsByTool };
+          if (toolId) {
+            newObservationsByTool[toolId] = [...(newObservationsByTool[toolId] || []), event];
+          }
+          return {
+            ...prev,
+            events: [...prev.events, event],
+            observationsByTool: newObservationsByTool,
+          };
+        });
+      });
 
-    eventSource.addEventListener('error', (e: MessageEvent) => {
-      if (!e.data) return;
-      const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
-      if (wrapper) {
-        setState(prev => ({ ...prev, error: wrapper.content }));
-      }
-    });
+      eventSource.addEventListener("step", (e) => {
+        const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
+        if (!wrapper) return;
+        const event: AgentEvent = {
+          id: generateEventId(),
+          type: "step",
+          timestamp: wrapper.timestamp,
+          content: wrapper.content as string,
+        };
+        setState((prev) => ({ ...prev, events: [...prev.events, event] }));
+      });
 
-    eventSource.addEventListener('done', () => {
-      setState(prev => ({ ...prev, isDone: true }));
-      isConnectingRef.current = false;
-    });
-  }, [resetState]);
+      eventSource.addEventListener("final_report", (e) => {
+        const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
+        if (!wrapper) return;
+        hasReceivedFinalReportRef.current = true;
+        setState((prev) => ({ ...prev, finalReport: wrapper.content, isGeneratingReport: false }));
+      });
+
+      eventSource.addEventListener("error", (e: MessageEvent) => {
+        if (!e.data) return;
+        const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
+        if (wrapper) {
+          setState((prev) => ({ ...prev, error: wrapper.content }));
+        }
+      });
+
+      eventSource.addEventListener("done", () => {
+        setState((prev) => ({ ...prev, isDone: true }));
+        isConnectingRef.current = false;
+      });
+    },
+    [resetState],
+  );
 
   useEffect(() => {
     if (!githubId) return;

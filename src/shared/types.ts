@@ -31,9 +31,17 @@ export interface GitHubEvent {
 }
 
 export type GitHubEventType =
-  | 'PushEvent' | 'CreateEvent' | 'DeleteEvent' | 'IssuesEvent' | 'PullRequestEvent'
-  | 'IssueCommentEvent' | 'PullRequestReviewEvent' | 'ForkEvent' | 'WatchEvent'
-  | 'ReleaseEvent' | 'CommitCommentEvent';
+  | "PushEvent"
+  | "CreateEvent"
+  | "DeleteEvent"
+  | "IssuesEvent"
+  | "PullRequestEvent"
+  | "IssueCommentEvent"
+  | "PullRequestReviewEvent"
+  | "ForkEvent"
+  | "WatchEvent"
+  | "ReleaseEvent"
+  | "CommitCommentEvent";
 
 export interface GitHubStarredRepo {
   id: number;
@@ -52,14 +60,20 @@ export interface SSEEvent {
 }
 
 export type SSEEventType =
-  | 'thinking' | 'observation' | 'step' | 'tool_start' | 'tool_end'
-  | 'final_report' | 'error' | 'done';
+  | "thinking"
+  | "observation"
+  | "step"
+  | "tool_start"
+  | "tool_end"
+  | "final_report"
+  | "error"
+  | "done";
 
 export class GitHubError extends Error {
   constructor(
     public readonly status: number,
     public readonly endpoint: string,
-    message: string
+    message: string,
   ) {
     super(message);
   }

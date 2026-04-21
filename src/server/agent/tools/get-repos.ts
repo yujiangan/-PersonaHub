@@ -1,12 +1,15 @@
-import type { GitHubRepo } from '~/shared/types';
-import { GitHubClient } from './github';
-import { fetchAllPages } from './fetch-pages';
+import type { GitHubRepo } from "~/shared/types";
+import { GitHubClient } from "./github";
+import { fetchAllPages } from "./fetch-pages";
 
 export async function getUserRepos(
   client: GitHubClient,
-  input: { username: string }
+  input: { username: string },
 ): Promise<GitHubRepo[]> {
-  const rawData = await fetchAllPages(client, `/users/${input.username}/repos`, { maxPages: 5, perPage: 100 });
+  const rawData = await fetchAllPages(client, `/users/${input.username}/repos`, {
+    maxPages: 5,
+    perPage: 100,
+  });
   return rawData.map((item: any) => ({
     id: item.id,
     name: item.name,
@@ -18,6 +21,6 @@ export async function getUserRepos(
     topics: item.topics || [],
     fork: item.fork,
     createdAt: item.created_at,
-    updatedAt: item.updated_at
+    updatedAt: item.updated_at,
   }));
 }

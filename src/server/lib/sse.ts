@@ -1,4 +1,4 @@
-import type { SSEEventType } from '~/shared/types';
+import type { SSEEventType } from "~/shared/types";
 
 export class SSEEmitter {
   constructor(private controller: ReadableStreamDefaultController) {}
@@ -12,7 +12,11 @@ export class SSEEmitter {
 
 export function createSSEStream(): { stream: ReadableStream<Uint8Array>; emitter: SSEEmitter } {
   let controller!: ReadableStreamDefaultController;
-  const stream = new ReadableStream<Uint8Array>({ start(c) { controller = c; } });
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
   const emitter = new SSEEmitter(controller);
   return { stream, emitter };
 }

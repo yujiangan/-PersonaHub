@@ -1,13 +1,13 @@
-import { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import type { Pluggable } from 'unified';
-import ThinkingCard from './ThinkingCard';
-import ToolCard from './ToolCard';
-import ObservationLine from './ObservationLine';
-import GeneratingHint from './GeneratingHint';
-import type { AgentEvent } from '../hooks/useAnalysis';
-import './agent-stream.css';
+import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { Pluggable } from "unified";
+import ThinkingCard from "./ThinkingCard";
+import ToolCard from "./ToolCard";
+import ObservationLine from "./ObservationLine";
+import GeneratingHint from "./GeneratingHint";
+import type { AgentEvent } from "../hooks/useAnalysis";
+import "./agent-stream.css";
 
 interface AgentStreamProps {
   finalReport: string;
@@ -27,19 +27,17 @@ function FinalReport({ report }: { report: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error('复制失败:', err);
+      console.error("复制失败:", err);
     }
   };
 
+  // 预处理 markdown，修复表格格式问题
   return (
     <div className="final-report-container">
       <div className="reply-block">
         <div className="copy-button-wrapper">
-          <button
-            onClick={handleCopy}
-            className={`copy-button ${copied ? 'copied' : ''}`}
-          >
-            {copied ? '✓ 已复制' : '📋 复制报告'}
+          <button onClick={handleCopy} className={`copy-button ${copied ? "copied" : ""}`}>
+            {copied ? "✓ 已复制" : "📋 复制报告"}
           </button>
         </div>
         <div className="markdown-body">
@@ -50,44 +48,44 @@ function FinalReport({ report }: { report: string }) {
   );
 }
 
-function EventRenderer({ event, observations }: { event: AgentEvent; observations?: AgentEvent[] }) {
+function EventRenderer({
+  event,
+  observations,
+}: {
+  event: AgentEvent;
+  observations?: AgentEvent[];
+}) {
   switch (event.type) {
-    case 'thinking':
+    case "thinking":
       if (event.content == null) return null;
       return <ThinkingCard content={event.content} />;
 
-    case 'tool_start':
+    case "tool_start":
       if (event.toolName == null) return null;
-      return (
-        <ToolCard
-          toolName={event.toolName}
-          status="running"
-        />
-      );
+      return <ToolCard toolName={event.toolName} status="running" />;
 
-    case 'tool_end':
+    case "tool_end":
       if (event.toolName == null) return null;
       // Only show the last observation (the result), not loading messages
-      const lastObservation = observations && observations.length > 0
-        ? observations[observations.length - 1]
-        : undefined;
+      const lastObservation =
+        observations && observations.length > 0 ? observations[observations.length - 1] : undefined;
       return (
         <ToolCard
           toolName={event.toolName}
-          status={event.toolSuccess ? 'success' : 'error'}
+          status={event.toolSuccess ? "success" : "error"}
           result={event.toolResult}
           summary={event.toolSummary}
           error={event.toolError}
         >
           {lastObservation && (
             <div className="tool-observation-inline">
-              <ObservationLine content={lastObservation.content || ''} />
+              <ObservationLine content={lastObservation.content || ""} />
             </div>
           )}
         </ToolCard>
       );
 
-    case 'observation':
+    case "observation":
       // Observations are shown inside tool_end cards
       return null;
 

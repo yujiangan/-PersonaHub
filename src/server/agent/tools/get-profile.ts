@@ -1,5 +1,5 @@
-import type { GitHubUser } from '~/shared/types';
-import { GitHubClient } from './github';
+import type { GitHubUser } from "~/shared/types";
+import { GitHubClient } from "./github";
 
 interface GitHubUserRaw {
   login: string;
@@ -13,7 +13,7 @@ interface GitHubUserRaw {
 
 export async function getUserProfile(
   client: GitHubClient,
-  input: { username: string }
+  input: { username: string },
 ): Promise<GitHubUser> {
   const data = await client.fetch<GitHubUserRaw>(`/users/${input.username}`);
   return {
@@ -23,6 +23,6 @@ export async function getUserProfile(
     publicRepos: data.public_repos,
     followers: data.followers,
     following: data.following,
-    createdAt: data.created_at
+    createdAt: data.created_at,
   };
 }

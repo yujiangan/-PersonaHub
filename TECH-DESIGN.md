@@ -7,13 +7,13 @@
 
 ## 1. 技术选型
 
-| 层级 | 技术 | 版本要求 | 用途 |
-|------|------|----------|------|
-| 构建工具 | VitePlus | ^3.x | 前端开发服务器与构建 |
-| React 插件 | @vitejs/plugin-react | ^4.x | React 17+ JSX Transform |
-| 服务端框架 | Nitro | ^3.x | API Routes、SSR、SSE |
-| 语言 | TypeScript | ^5.x | 全栈类型安全 |
-| 流式协议 | Server-Sent Events | — | 服务端→客户端实时推送 |
+| 层级       | 技术                 | 版本要求 | 用途                    |
+| ---------- | -------------------- | -------- | ----------------------- |
+| 构建工具   | VitePlus             | ^3.x     | 前端开发服务器与构建    |
+| React 插件 | @vitejs/plugin-react | ^4.x     | React 17+ JSX Transform |
+| 服务端框架 | Nitro                | ^3.x     | API Routes、SSR、SSE    |
+| 语言       | TypeScript           | ^5.x     | 全栈类型安全            |
+| 流式协议   | Server-Sent Events   | —        | 服务端→客户端实时推送   |
 
 ### 1.1 技术选型理由
 
@@ -83,13 +83,13 @@ personahub/
 ```typescript
 // GitHubUser — 用户基本信息（PRD「基本信息」维度）
 interface GitHubUser {
-  login: string;       // GitHub 用户名，用于查询和展示
+  login: string; // GitHub 用户名，用于查询和展示
   avatarUrl: string;
   bio: string | null;
   publicRepos: number;
   followers: number;
   following: number;
-  createdAt: string;    // ISO 8601
+  createdAt: string; // ISO 8601
 }
 
 // GitHubRepo — 仓库信息
@@ -113,7 +113,7 @@ interface GitHubEvent {
   type: GitHubEventType;
   repo: { name: string; url: string };
   payload: Record<string, unknown>;
-  createdAt: string;  // ISO 8601，用于 90 天过滤
+  createdAt: string; // ISO 8601，用于 90 天过滤
 }
 
 // GitHubStarredRepo — Starred 仓库
@@ -134,28 +134,28 @@ interface GitHubStarredRepo {
 // SSEEvent — 统一事件格式
 // timestamp 为 Unix 毫秒时间戳（Date.now()），前端用 new Date(timestamp) 转换
 interface SSEEvent {
-  type: 'thinking' | 'observation' | 'final_report' | 'error' | 'done';
+  type: "thinking" | "observation" | "final_report" | "error" | "done";
   content: string;
-  timestamp: number;  // Unix ms
+  timestamp: number; // Unix ms
 }
 ```
 
-| type | 触发时机 | content 示例 |
-|------|----------|-------------|
-| `thinking` | 每个 Phase 开始时 | "正在获取用户资料..." |
-| `observation` | 每个 Phase 执行成功后 | 见下方摘要结构 |
-| `final_report` | 报告生成完成后 | Markdown 报告全文 |
-| `error` | 任意阶段出错时 | 用户可见的中文错误提示 |
-| `done` | 流结束前 | 空字符串 |
+| type           | 触发时机              | content 示例           |
+| -------------- | --------------------- | ---------------------- |
+| `thinking`     | 每个 Phase 开始时     | "正在获取用户资料..."  |
+| `observation`  | 每个 Phase 执行成功后 | 见下方摘要结构         |
+| `final_report` | 报告生成完成后        | Markdown 报告全文      |
+| `error`        | 任意阶段出错时        | 用户可见的中文错误提示 |
+| `done`         | 流结束前              | 空字符串               |
 
 **observation content 摘要结构**（`formatObservation`）：
 
-| Phase | content 示例 |
-|-------|-------------|
+| Phase            | content 示例                                  |
+| ---------------- | --------------------------------------------- |
 | FETCHING_PROFILE | "已加载用户资料：{login}" 或 "无用户资料数据" |
-| FETCHING_REPOS | "已获取 {n} 个仓库"（n=0 时仍发送） |
-| FETCHING_EVENTS | "已获取 {n} 条事件"（n=0 时仍发送） |
-| FETCHING_STARS | "已获取 {n} 个 Starred 仓库"（n=0 时仍发送） |
+| FETCHING_REPOS   | "已获取 {n} 个仓库"（n=0 时仍发送）           |
+| FETCHING_EVENTS  | "已获取 {n} 条事件"（n=0 时仍发送）           |
+| FETCHING_STARS   | "已获取 {n} 个 Starred 仓库"（n=0 时仍发送）  |
 
 注：数据为空（如 repos=[]）属于「调用成功」，仍发送 observation；「调用失败」才发送 error。
 
@@ -164,31 +164,31 @@ interface SSEEvent {
 ```typescript
 // Phase — Agent 执行阶段
 type Phase =
-  | 'INIT'
-  | 'FETCHING_PROFILE'
-  | 'FETCHING_REPOS'
-  | 'FETCHING_EVENTS'
-  | 'FETCHING_STARS'
-  | 'BUILDING_REPORT'
-  | 'DONE'
-  | 'ERROR';
+  | "INIT"
+  | "FETCHING_PROFILE"
+  | "FETCHING_REPOS"
+  | "FETCHING_EVENTS"
+  | "FETCHING_STARS"
+  | "BUILDING_REPORT"
+  | "DONE"
+  | "ERROR";
 
 // AnalysisContext — ReAct 主循环上下文，各 Phase 间传递数据
 interface AnalysisContext {
-  username: string;  // GitHub 用户名，用于 API 查询
+  username: string; // GitHub 用户名，用于 API 查询
   phase: Phase;
-  profile: GitHubUser | null;          // 无数据时为 null，不中断
-  repos: GitHubRepo[];                  // 无数据时为 []
-  events: GitHubEvent[];                // 无数据时为 []
-  stars: GitHubStarredRepo[];           // 无数据时为 []
-  error: GitHubError | null;            // 当前模块错误，不中断后续模块
-  startedAt: number;                    // Unix ms，用于超时检测
+  profile: GitHubUser | null; // 无数据时为 null，不中断
+  repos: GitHubRepo[]; // 无数据时为 []
+  events: GitHubEvent[]; // 无数据时为 []
+  stars: GitHubStarredRepo[]; // 无数据时为 []
+  error: GitHubError | null; // 当前模块错误，不中断后续模块
+  startedAt: number; // Unix ms，用于超时检测
 }
 
 // SchedulerOutput — Scheduler 返回值
 interface SchedulerOutput {
   nextPhase: Phase;
-  execute: () => Promise<void>;         // 异步执行函数
+  execute: () => Promise<void>; // 异步执行函数
 }
 
 // GitHubError — GitHub API 错误
@@ -196,8 +196,10 @@ class GitHubError extends Error {
   constructor(
     public readonly status: number,
     public readonly endpoint: string,
-    message: string
-  ) { super(message); }
+    message: string,
+  ) {
+    super(message);
+  }
 }
 ```
 
@@ -208,12 +210,12 @@ class GitHubError extends Error {
 ### 4.1 ReAct 主循环（伪代码）
 
 ```typescript
-while (phase !== 'DONE' && phase !== 'ERROR') {
-  emitter.emit('thinking', PHASE_MESSAGES[phase]);
+while (phase !== "DONE" && phase !== "ERROR") {
+  emitter.emit("thinking", PHASE_MESSAGES[phase]);
 
-  if (phase === 'BUILDING_REPORT') {
-    emitter.emit('final_report', buildReport(ctx));
-    emitter.emit('done', '');
+  if (phase === "BUILDING_REPORT") {
+    emitter.emit("final_report", buildReport(ctx));
+    emitter.emit("done", "");
     break;
   }
 
@@ -222,15 +224,16 @@ while (phase !== 'DONE' && phase !== 'ERROR') {
   try {
     await execute();
     phase = nextPhase;
-    emitter.emit('observation', formatObservation(ctx));
+    emitter.emit("observation", formatObservation(ctx));
   } catch (err) {
-    ctx.error = err as GitHubError;                    // 记录错误，但不中断
-    emitter.emit('error', mapErrorToUserMessage(err as Error)); // 降级继续
+    ctx.error = err as GitHubError; // 记录错误，但不中断
+    emitter.emit("error", mapErrorToUserMessage(err as Error)); // 降级继续
   }
 }
 ```
 
 **关键设计**：
+
 - 任一模块失败只记录 `ctx.error`，后续模块继续执行（降级策略）
 - `final_report` 后发送 `done` 事件形成闭环
 - 详见 `src/server/agent/reactor.ts`
@@ -274,12 +277,12 @@ while (phase !== 'DONE' && phase !== 'ERROR') {
 
 报告须包含以下四个模块，详见 `src/server/agent/report-builder.ts`：
 
-| 维度 | 说明 | 数据来源 |
-|------|------|----------|
-| 技术画像 | 编程语言 Top N、项目领域、开源风格（自建/协作比例）、偏好技术 | repos + stars |
-| 活跃时间 | 活跃时段（工作日/周末/均衡）、高峰小时（UTC） | events |
-| 最近动态 | 90 天内活动数、事件类型分布、活跃项目、技术热点 | events（created_at >= 90 天前） |
-| 基本信息 | 用户名（login）、头像、Bio、粉丝数、仓库数等 | profile |
+| 维度     | 说明                                                          | 数据来源                        |
+| -------- | ------------------------------------------------------------- | ------------------------------- |
+| 技术画像 | 编程语言 Top N、项目领域、开源风格（自建/协作比例）、偏好技术 | repos + stars                   |
+| 活跃时间 | 活跃时段（工作日/周末/均衡）、高峰小时（UTC）                 | events                          |
+| 最近动态 | 90 天内活动数、事件类型分布、活跃项目、技术热点               | events（created_at >= 90 天前） |
+| 基本信息 | 用户名（login）、头像、Bio、粉丝数、仓库数等                  | profile                         |
 
 **技术画像详细说明**：
 
@@ -307,16 +310,36 @@ while (phase !== 'DONE' && phase !== 'ERROR') {
 ```typescript
 function schedule(ctx: AnalysisContext, client: GitHubClient): SchedulerOutput {
   switch (ctx.phase) {
-    case 'INIT':
-      return { nextPhase: 'FETCHING_PROFILE', execute: () => { ctx.profile = await getUserProfile(client, ctx.username); } };
-    case 'FETCHING_PROFILE':
-      return { nextPhase: 'FETCHING_REPOS', execute: () => { ctx.repos = await getUserRepos(client, ctx.username); } };
-    case 'FETCHING_REPOS':
-      return { nextPhase: 'FETCHING_EVENTS', execute: () => { ctx.events = await getUserEvents(client, ctx.username); } };
-    case 'FETCHING_EVENTS':
-      return { nextPhase: 'FETCHING_STARS', execute: () => { ctx.stars = await getUserStars(client, ctx.username); } };
-    case 'FETCHING_STARS':
-      return { nextPhase: 'BUILDING_REPORT', execute: () => {} }; // 报告构建在 reactor 中调用
+    case "INIT":
+      return {
+        nextPhase: "FETCHING_PROFILE",
+        execute: () => {
+          ctx.profile = await getUserProfile(client, ctx.username);
+        },
+      };
+    case "FETCHING_PROFILE":
+      return {
+        nextPhase: "FETCHING_REPOS",
+        execute: () => {
+          ctx.repos = await getUserRepos(client, ctx.username);
+        },
+      };
+    case "FETCHING_REPOS":
+      return {
+        nextPhase: "FETCHING_EVENTS",
+        execute: () => {
+          ctx.events = await getUserEvents(client, ctx.username);
+        },
+      };
+    case "FETCHING_EVENTS":
+      return {
+        nextPhase: "FETCHING_STARS",
+        execute: () => {
+          ctx.stars = await getUserStars(client, ctx.username);
+        },
+      };
+    case "FETCHING_STARS":
+      return { nextPhase: "BUILDING_REPORT", execute: () => {} }; // 报告构建在 reactor 中调用
   }
 }
 ```
@@ -325,16 +348,16 @@ function schedule(ctx: AnalysisContext, client: GitHubClient): SchedulerOutput {
 
 ### 4.5 Agent 阶段定义
 
-| Phase | 说明 | 出错策略 |
-|-------|------|----------|
-| `INIT` | 初始化 | — |
-| `FETCHING_PROFILE` | 获取用户资料 | 降级：profile 为 null 仍继续 |
-| `FETCHING_REPOS` | 获取仓库列表 | 降级：repos 为空数组仍继续 |
-| `FETCHING_EVENTS` | 获取活动时间线 | 降级：events 为空数组仍继续 |
-| `FETCHING_STARS` | 获取 Starred 仓库 | 降级：stars 为空数组仍继续 |
-| `BUILDING_REPORT` | 生成报告 | — |
-| `DONE` | 完成 | — |
-| `ERROR` | 出错 | — |
+| Phase              | 说明              | 出错策略                     |
+| ------------------ | ----------------- | ---------------------------- |
+| `INIT`             | 初始化            | —                            |
+| `FETCHING_PROFILE` | 获取用户资料      | 降级：profile 为 null 仍继续 |
+| `FETCHING_REPOS`   | 获取仓库列表      | 降级：repos 为空数组仍继续   |
+| `FETCHING_EVENTS`  | 获取活动时间线    | 降级：events 为空数组仍继续  |
+| `FETCHING_STARS`   | 获取 Starred 仓库 | 降级：stars 为空数组仍继续   |
+| `BUILDING_REPORT`  | 生成报告          | —                            |
+| `DONE`             | 完成              | —                            |
+| `ERROR`            | 出错              | —                            |
 
 **降级策略**：任一模块失败不中断整次分析，错误记录在 `ctx.error`，后续模块继续执行，最终报告生成时会利用已有数据。
 
@@ -358,14 +381,14 @@ async emit(type: SSEEvent['type'], content: string): void {
 
 thinking 事件发送的是用户可感知的进度描述，应与 PRD 中的阶段对应：
 
-| Phase | thinking content（中文） |
-|-------|------------------------|
-| INIT | "正在初始化分析..." |
-| FETCHING_PROFILE | "正在获取基本信息..." |
-| FETCHING_REPOS | "正在分析仓库列表..." |
-| FETCHING_EVENTS | "正在分析活跃时间..." |
-| FETCHING_STARS | "正在分析 Star 记录..." |
-| BUILDING_REPORT | "正在生成分析报告..." |
+| Phase            | thinking content（中文） |
+| ---------------- | ------------------------ |
+| INIT             | "正在初始化分析..."      |
+| FETCHING_PROFILE | "正在获取基本信息..."    |
+| FETCHING_REPOS   | "正在分析仓库列表..."    |
+| FETCHING_EVENTS  | "正在分析活跃时间..."    |
+| FETCHING_STARS   | "正在分析 Star 记录..."  |
+| BUILDING_REPORT  | "正在生成分析报告..."    |
 
 详见 `src/server/agent/reactor.ts` 中的 `PHASE_MESSAGES`。
 
@@ -374,10 +397,18 @@ thinking 事件发送的是用户可感知的进度描述，应与 PRD 中的阶
 前端必须使用 `addEventListener` 监听命名事件，不能使用 `onmessage`：
 
 ```javascript
-eventSource.addEventListener('thinking', (e) => { /* ... */ });
-eventSource.addEventListener('observation', (e) => { /* ... */ });
-eventSource.addEventListener('final_report', (e) => { /* ... */ });
-eventSource.addEventListener('error', (e) => { /* ... */ });
+eventSource.addEventListener("thinking", (e) => {
+  /* ... */
+});
+eventSource.addEventListener("observation", (e) => {
+  /* ... */
+});
+eventSource.addEventListener("final_report", (e) => {
+  /* ... */
+});
+eventSource.addEventListener("error", (e) => {
+  /* ... */
+});
 ```
 
 详见 `src/app/hooks/useAnalysis.ts`
@@ -390,12 +421,15 @@ eventSource.addEventListener('error', (e) => { /* ... */ });
 function mapErrorToUserMessage(err: Error): string {
   if (err instanceof GitHubError) {
     switch (err.status) {
-      case 404: return '用户不存在，请检查 GitHub ID 是否正确。';
-      case 403: return 'API 请求频率超限，请稍后再试。';
-      default:  return `网络异常：${err.message}`;
+      case 404:
+        return "用户不存在，请检查 GitHub ID 是否正确。";
+      case 403:
+        return "API 请求频率超限，请稍后再试。";
+      default:
+        return `网络异常：${err.message}`;
     }
   }
-  return '网络异常，分析失败，请重试。';
+  return "网络异常，分析失败，请重试。";
 }
 ```
 
@@ -407,12 +441,12 @@ function mapErrorToUserMessage(err: Error): string {
 
 ### 7.1 工具函数
 
-| 函数 | 调用的 GitHub API | 分页规则 |
-|------|-------------------|----------|
-| `getUserProfile` | `GET /users/{username}` | — |
-| `getUserRepos` | `GET /users/{username}/repos` | `per_page=100`，最多 5 页（500 条） |
-| `getUserEvents` | `GET /users/{username}/events` | `per_page=100`，最多 10 页（1000 条） |
-| `getUserStars` | `GET /users/{username}/starred` | `per_page=100`，最多 10 页（1000 条） |
+| 函数             | 调用的 GitHub API               | 分页规则                              |
+| ---------------- | ------------------------------- | ------------------------------------- |
+| `getUserProfile` | `GET /users/{username}`         | —                                     |
+| `getUserRepos`   | `GET /users/{username}/repos`   | `per_page=100`，最多 5 页（500 条）   |
+| `getUserEvents`  | `GET /users/{username}/events`  | `per_page=100`，最多 10 页（1000 条） |
+| `getUserStars`   | `GET /users/{username}/starred` | `per_page=100`，最多 10 页（1000 条） |
 
 **分页终止条件**：遇空页即停止（非强制拉满最大页数）。
 
@@ -425,9 +459,9 @@ async function fetchAllPages(client, baseEndpoint, maxPages = 5, perPage = 100) 
   const results = [];
   for (let page = 1; page <= maxPages; page++) {
     const data = await client.fetch(`${baseEndpoint}?per_page=${perPage}&page=${page}`);
-    if (!Array.isArray(data) || data.length === 0) break;  // 遇空页停止
+    if (!Array.isArray(data) || data.length === 0) break; // 遇空页停止
     results.push(...data);
-    if (data.length < perPage) break;  // 不足一页说明已到末尾
+    if (data.length < perPage) break; // 不足一页说明已到末尾
   }
   return results;
 }
@@ -459,19 +493,19 @@ class GitHubClient {
 
 **两种 403 场景的区分**：
 
-| 403 场景 | 判断方式 | 用户消息 |
-|----------|----------|----------|
-| 单用户请求频率超限 | 单用户短时间内大量请求 | API 请求频率超限，请稍后再试。 |
-| Token 配额用尽 | X-RateLimit-Remaining = 0 | 服务繁忙，请稍后再试。 |
+| 403 场景           | 判断方式                  | 用户消息                       |
+| ------------------ | ------------------------- | ------------------------------ |
+| 单用户请求频率超限 | 单用户短时间内大量请求    | API 请求频率超限，请稍后再试。 |
+| Token 配额用尽     | X-RateLimit-Remaining = 0 | 服务繁忙，请稍后再试。         |
 
 判断逻辑：响应头中 `X-RateLimit-Remaining === 0` 时视为配额用尽，否则视为单用户限流。
 
 **「数据为空」与「调用失败」的区别**：
 
-| 场景 | 触发条件 | observation content 示例 | 是否发送 error |
-|------|----------|-------------------------|----------------|
-| 调用成功，数据为空 | API 返回 200 但 body=[] | "已获取 0 个仓库" | 否 |
-| 调用失败 | API 返回 404/403/网络错误 | — | 是（发送 error，降级继续） |
+| 场景               | 触发条件                  | observation content 示例 | 是否发送 error             |
+| ------------------ | ------------------------- | ------------------------ | -------------------------- |
+| 调用成功，数据为空 | API 返回 200 但 body=[]   | "已获取 0 个仓库"        | 否                         |
+| 调用失败           | API 返回 404/403/网络错误 | —                        | 是（发送 error，降级继续） |
 
 详见 `src/server/agent/reactor.ts` 中的 `mapErrorToUserMessage` 函数。
 
@@ -479,25 +513,25 @@ class GitHubClient {
 
 ## 8. 错误分类与响应
 
-| 错误类型 | 触发条件 | 用户消息 | HTTP 状态码 |
-|----------|----------|----------|-------------|
-| 无效输入 | username 格式不符 | GitHub 用户名格式不正确 | 400 |
-| 用户不存在 | GitHub API 404 | 用户不存在，请检查 GitHub ID 是否正确。 | — (SSE) |
-| API 限流 | GitHub API 403 | API 请求频率超限，请稍后再试。 | — (SSE) |
-| 请求超时 | 超过 60s | 分析超时，请重试。 | — (SSE) |
-| 网络错误 | fetch 抛出异常 | 网络异常，分析失败，请重试。 | — (SSE) |
-| 服务繁忙 | 未捕获异常 | 服务繁忙，请稍后再试。 | — (SSE) |
-| 配置错误 | 缺少 GITHUB_TOKEN | (不返回给客户端) | 500 |
+| 错误类型   | 触发条件          | 用户消息                                | HTTP 状态码 |
+| ---------- | ----------------- | --------------------------------------- | ----------- |
+| 无效输入   | username 格式不符 | GitHub 用户名格式不正确                 | 400         |
+| 用户不存在 | GitHub API 404    | 用户不存在，请检查 GitHub ID 是否正确。 | — (SSE)     |
+| API 限流   | GitHub API 403    | API 请求频率超限，请稍后再试。          | — (SSE)     |
+| 请求超时   | 超过 60s          | 分析超时，请重试。                      | — (SSE)     |
+| 网络错误   | fetch 抛出异常    | 网络异常，分析失败，请重试。            | — (SSE)     |
+| 服务繁忙   | 未捕获异常        | 服务繁忙，请稍后再试。                  | — (SSE)     |
+| 配置错误   | 缺少 GITHUB_TOKEN | (不返回给客户端)                        | 500         |
 
 ---
 
 ## 9. 前端组件
 
-| 组件 | 职责 |
-|------|------|
-| `SearchBar` | 用户输入 GitHub username，触发分析 |
+| 组件             | 职责                                 |
+| ---------------- | ------------------------------------ |
+| `SearchBar`      | 用户输入 GitHub username，触发分析   |
 | `ThinkingStream` | 实时展示 thinking/observation 事件流 |
-| `ProfileReport` | 展示最终报告，支持复制 |
+| `ProfileReport`  | 展示最终报告，支持复制               |
 
 详见 `src/app/components/`
 
@@ -562,13 +596,13 @@ GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 
 ## 13. 实现索引
 
-| 设计点 | 源文件 | 关键导出 |
-|--------|--------|----------|
-| SSE Emitter | `src/server/lib/sse.ts` | `SSEEmitter.emit()`, `createSSEStream()` |
-| ReAct 主循环 | `src/server/agent/reactor.ts` | `runReactor()` |
-| 状态调度器 | `src/server/agent/scheduler.ts` | `schedule()` |
-| 报告生成器 | `src/server/agent/report-builder.ts` | `buildReport()`, `analyzeLanguages()`, `analyzeProjectDomains()`, `analyzeOpenSourceStyle()`, `analyzePreferredTechnologies()`, `analyzeActiveTime()`, `analyzeRecentActivity()` |
-| GitHubClient | `src/server/agent/tools/github.ts` | `GitHubClient.fetch()`, `fetchAllPages()` |
-| API 入口 | `src/server/api/analyze.get.ts` | — |
-| 前端 SSE Hook | `src/app/hooks/useAnalysis.ts` | `useAnalysis()` |
-| 共享类型 | `src/shared/types.ts` | `GitHubUser`, `GitHubRepo`, `GitHubEvent`, `SSEEvent`, `Phase`, `AnalysisContext` |
+| 设计点        | 源文件                               | 关键导出                                                                                                                                                                         |
+| ------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SSE Emitter   | `src/server/lib/sse.ts`              | `SSEEmitter.emit()`, `createSSEStream()`                                                                                                                                         |
+| ReAct 主循环  | `src/server/agent/reactor.ts`        | `runReactor()`                                                                                                                                                                   |
+| 状态调度器    | `src/server/agent/scheduler.ts`      | `schedule()`                                                                                                                                                                     |
+| 报告生成器    | `src/server/agent/report-builder.ts` | `buildReport()`, `analyzeLanguages()`, `analyzeProjectDomains()`, `analyzeOpenSourceStyle()`, `analyzePreferredTechnologies()`, `analyzeActiveTime()`, `analyzeRecentActivity()` |
+| GitHubClient  | `src/server/agent/tools/github.ts`   | `GitHubClient.fetch()`, `fetchAllPages()`                                                                                                                                        |
+| API 入口      | `src/server/api/analyze.get.ts`      | —                                                                                                                                                                                |
+| 前端 SSE Hook | `src/app/hooks/useAnalysis.ts`       | `useAnalysis()`                                                                                                                                                                  |
+| 共享类型      | `src/shared/types.ts`                | `GitHubUser`, `GitHubRepo`, `GitHubEvent`, `SSEEvent`, `Phase`, `AnalysisContext`                                                                                                |
