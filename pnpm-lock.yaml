@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      h3:
+        specifier: ^2.0.1-rc.2
+        version: 2.0.1-rc.20(crossws@0.4.5(srvx@0.11.15))
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -20,6 +23,9 @@ importers:
       remark-gfm:
         specifier: ^4.0.1
         version: 4.0.1
+      unified:
+        specifier: ^11.0.5
+        version: 11.0.5
     devDependencies:
       '@types/node':
         specifier: ^24.12.2
