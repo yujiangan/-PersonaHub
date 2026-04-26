@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Pluggable } from "unified";
@@ -6,6 +6,7 @@ import ThinkingCard from "./ThinkingCard";
 import ToolCard from "./ToolCard";
 import ObservationLine from "./ObservationLine";
 import GeneratingHint from "./GeneratingHint";
+import { useScroll } from "../hooks/useScroll";
 import type { AgentEvent } from "../hooks/useAnalysis";
 import "./agent-stream.css";
 
@@ -102,27 +103,49 @@ export default function AgentStream({
   events,
   observationsByTool = {},
 }: AgentStreamProps) {
+  const { containerRef, autoScrollEnabled, setAutoScrollEnabled, handleScroll, scrollToBottom } =
+    useScroll();
+
+  // 新内容到达时自动滚动
+  useEffect(() => {
+    scrollToBottom();
+  }, [finalReport, scrollToBottom]);
+
   if (!finalReport && !error && events.length === 0) return null;
 
   return (
     <div className="agent-stream">
       {error && <div className="error-block">❌ {error}</div>}
 
-      <div className="events-container">
-        {events.map((event) => {
-          // For tool_end events, get associated observations
-          const obs = event.toolCallId ? observationsByTool[event.toolCallId] : undefined;
-          return (
-            <div key={event.id} className="event-item">
-              <EventRenderer event={event} observations={obs} />
-            </div>
-          );
-        })}
+      <div ref={containerRef} onScroll={handleScroll} className="agent-stream-container">
+        <div className="events-container">
+          {events.map((event) => {
+            const obs = event.toolCallId ? observationsByTool[event.toolCallId] : undefined;
+            return (
+              <div key={event.id} className="event-item">
+                <EventRenderer event={event} observations={obs} />
+              </div>
+            );
+          })}
+        </div>
+
+        {isGeneratingReport && <GeneratingHint />}
+
+        {isDone && finalReport && <FinalReport report={finalReport} />}
       </div>
 
-      {isGeneratingReport && <GeneratingHint />}
-
-      {isDone && finalReport && <FinalReport report={finalReport} />}
+      {/* 新内容提示（当停止自动滚动时显示） */}
+      {!autoScrollEnabled && !isDone && (
+        <button
+          className="scroll-to-bottom-hint"
+          onClick={() => {
+            setAutoScrollEnabled(true);
+            scrollToBottom();
+          }}
+        >
+          ↓ 新内容
+        </button>
+      )}
     </div>
   );
 }
