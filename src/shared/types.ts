@@ -59,13 +59,36 @@ export interface SSEEvent {
   timestamp: number;
 }
 
+export interface AgentEvent {
+  id: string;
+  type: SSEEventType;
+  timestamp: number;
+  // thinking
+  content?: string;
+  // tool_start
+  toolCallId?: string;
+  toolName?: string;
+  toolInput?: Record<string, unknown>;
+  // tool_end
+  toolSuccess?: boolean;
+  toolResult?: unknown;
+  toolSummary?: string;
+  toolError?: string | null;
+  // streaming fields
+  thinkingContent?: string;
+  isStreaming?: boolean;
+}
+
 export type SSEEventType =
-  | "thinking"
-  | "observation"
   | "step"
   | "tool_start"
-  | "tool_end"
-  | "final_report"
+  | "thinking_chunk"
+  | "thinking_done"
+  | "tool_result_done"
+  | "report_chunk"
+  | "report_done"
+  | "report_error"
+  | "observation"
   | "error"
   | "done";
 
