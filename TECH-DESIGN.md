@@ -3,6 +3,8 @@
 > 本文档面向开发者，定义系统架构、模块边界、接口契约与实现细节。
 > 代码实现详见对应源文件，文档只引用路径不做内联。
 
+**与当前代码对齐（主线）**：分析流程由 `src/server/agent/agent-loop.ts` 的 `runAgentLoop()` 驱动——工具阶段通过 MiniMax 流式 `chatStream` 决策并调用 `dispatch.ts` 注册的 GitHub 工具；数据齐备后进入报告阶段，按 `REPORT_PROMPT`（对齐 PRD 四章）流式输出 `report_chunk`。SSE 事件类型以 `src/shared/types.ts` 的 `SSEEventType` 为准。下文若仍出现 `reactor.ts`、`report-builder.ts` 等文件名，为早期设计描述，以仓库内实际路径为准。
+
 ---
 
 ## 1. 技术选型
@@ -19,7 +21,7 @@
 
 - **VitePlus**: 基于 Vite 的轻量增强，保留 Vite 原生 DX，plugin-react 兼容 React 生态。
 - **Nitro**: 极简服务端框架，支持任意运行时（Node.js / Cloudflare Workers / Vercel），API 设计与 H3 兼容。
-- **纯手写 ReAct**: 无 LLM 依赖，决策逻辑完全由代码控制，零推理成本。
+- **LLM 编排 + 工具调用**：由 MiniMax 完成工具选择与报告撰写，GitHub 访问仍走服务端工具层。
 
 ### 1.2 技术约束
 
@@ -41,8 +43,8 @@ personahub/
 │   │   ├── index.html
 │   │   ├── components/
 │   │   │   ├── SearchBar.tsx
-│   │   │   ├── ThinkingStream.tsx
-│   │   │   └── ProfileReport.tsx
+│   │   │   ├── AgentStream.tsx     # 思考流 + 工具卡片 + Markdown 报告
+│   │   │   └── …
 │   │   └── hooks/
 │   │       └── useAnalysis.ts      # SSE 客户端 Hook
 │   │
@@ -50,11 +52,10 @@ personahub/
 │   │   ├── api/
 │   │   │   └── analyze.get.ts      # GET /api/analyze
 │   │   ├── agent/
-│   │   │   ├── index.ts            # Agent Facade
-│   │   │   ├── types.ts            # Agent 内部类型
-│   │   │   ├── reactor.ts          # ReAct 主循环
-│   │   │   ├── scheduler.ts        # 状态转移决策
-│   │   │   ├── report-builder.ts   # 报告生成
+│   │   │   ├── agent-loop.ts       # runAgentLoop：工具轮 + 报告轮
+│   │   │   ├── minimax-client.ts   # MiniMax 流式 / 非流式 API
+│   │   │   ├── tools-schema.ts     # 工具 JSON Schema
+│   │   │   ├── dispatch.ts         # 工具注册与执行
 │   │   │   └── tools/
 │   │   │       ├── github.ts       # GitHubClient
 │   │   │       ├── get-profile.ts
@@ -62,8 +63,7 @@ personahub/
 │   │   │       ├── get-events.ts
 │   │   │       └── get-stars.ts
 │   │   └── lib/
-│   │       ├── sse.ts              # SSE Emitter
-│   │       └── errors.ts
+│   │       └── sse.ts              # SSE Emitter
 │   └── shared/
 │       └── types.ts                # 跨端类型定义
 ├── package.json
@@ -130,34 +130,24 @@ interface GitHubStarredRepo {
 
 ### 3.2 SSE 事件格式
 
-```typescript
-// SSEEvent — 统一事件格式
-// timestamp 为 Unix 毫秒时间戳（Date.now()），前端用 new Date(timestamp) 转换
-interface SSEEvent {
-  type: "thinking" | "observation" | "final_report" | "error" | "done";
-  content: string;
-  timestamp: number; // Unix ms
-}
-```
+详见 `src/shared/types.ts` 中的 `SSEEventType`。载荷统一为 `{ type, content, timestamp }`（`timestamp` 为 Unix 毫秒）。
 
-| type           | 触发时机              | content 示例           |
-| -------------- | --------------------- | ---------------------- |
-| `thinking`     | 每个 Phase 开始时     | "正在获取用户资料..."  |
-| `observation`  | 每个 Phase 执行成功后 | 见下方摘要结构         |
-| `final_report` | 报告生成完成后        | Markdown 报告全文      |
-| `error`        | 任意阶段出错时        | 用户可见的中文错误提示 |
-| `done`         | 流结束前              | 空字符串               |
+**当前实现常用事件**：
 
-**observation content 摘要结构**（`formatObservation`）：
+| type                      | 触发时机                    | content 含义                                           |
+| ------------------------- | --------------------------- | ------------------------------------------------------ |
+| `thinking_chunk`          | MiniMax 流式 reasoning 增量 | 思考文本片段（工具阶段侧重选工具；报告阶段可继续追加） |
+| `thinking_done`           | 单轮流式结束                | 空或占位                                               |
+| `tool_start` / `tool_end` | 工具执行前后                | JSON 字符串（含 toolCallId、summary 等）               |
+| `observation`             | 工具执行日志                | JSON 或摘要文本                                        |
+| `step`                    | Agent 迭代轮次              | JSON（iteration 等）                                   |
+| `report_chunk`            | 报告正文流式增量            | Markdown 片段                                          |
+| `report_done`             | 报告流结束                  | 空                                                     |
+| `error` / `done`          | 错误或整条 SSE 收尾         | 用户可读文案 / 空                                      |
 
-| Phase            | content 示例                                  |
-| ---------------- | --------------------------------------------- |
-| FETCHING_PROFILE | "已加载用户资料：{login}" 或 "无用户资料数据" |
-| FETCHING_REPOS   | "已获取 {n} 个仓库"（n=0 时仍发送）           |
-| FETCHING_EVENTS  | "已获取 {n} 条事件"（n=0 时仍发送）           |
-| FETCHING_STARS   | "已获取 {n} 个 Starred 仓库"（n=0 时仍发送）  |
+兼容保留：`thinking`、`final_report` 等类型定义仍在类型联合中，前端可按需监听。
 
-注：数据为空（如 repos=[]）属于「调用成功」，仍发送 observation；「调用失败」才发送 error。
+**observation**（当前）：多为工具 `logs` 数组中的单行说明，非早期「Phase 枚举」结构。
 
 ### 3.3 Agent 核心类型
 
@@ -207,36 +197,18 @@ class GitHubError extends Error {
 
 ## 4. 系统架构
 
-### 4.1 ReAct 主循环（伪代码）
+### 4.1 Agent 主循环（实现概要）
 
-```typescript
-while (phase !== "DONE" && phase !== "ERROR") {
-  emitter.emit("thinking", PHASE_MESSAGES[phase]);
+实现见 `src/server/agent/agent-loop.ts` 中 `runAgentLoop()`：
 
-  if (phase === "BUILDING_REPORT") {
-    emitter.emit("final_report", buildReport(ctx));
-    emitter.emit("done", "");
-    break;
-  }
-
-  const { nextPhase, execute } = schedule(ctx, client);
-
-  try {
-    await execute();
-    phase = nextPhase;
-    emitter.emit("observation", formatObservation(ctx));
-  } catch (err) {
-    ctx.error = err as GitHubError; // 记录错误，但不中断
-    emitter.emit("error", mapErrorToUserMessage(err as Error)); // 降级继续
-  }
-}
-```
+1. 校验用户存在后，进入 `while` 迭代：每轮对 MiniMax `chatStream(messages, tools)` 消费流式片段；`reasoning` 经 `thinking_chunk` 推给前端；完整 `tool_call` 经累积后执行 `executeTool`。
+2. 若有工具调用：写入 `messages` 后继续下一轮；若无：视为数据已齐，构造 `constructDataSummary(agentCtx)`，用 `REPORT_PROMPT`（对齐 PRD 四章）发起第二次 `chatStream`，`content` → `report_chunk`，`reasoning` 仍可 → `thinking_chunk`，最后 `report_done` 与 `done`。
 
 **关键设计**：
 
-- 任一模块失败只记录 `ctx.error`，后续模块继续执行（降级策略）
-- `final_report` 后发送 `done` 事件形成闭环
-- 详见 `src/server/agent/reactor.ts`
+- 工具阶段 system 提示（`TOOL_AGENT_SYSTEM`）约束 reasoning 只做「选工具」叙述，禁止复述工具返回正文。
+- 报告阶段 system / user（`REPORT_AGENT_SYSTEM` + `REPORT_PROMPT`）约束输出为合法 Markdown 与 PRD 四个一级章节。
+- 异常路径在 `analyze.get.ts` 中应尽量 `error` 后补 `done`，避免前端悬挂。
 
 ### 4.2 数据流
 
@@ -251,23 +223,17 @@ while (phase !== "DONE" && phase !== "ERROR") {
           │ 创建 SSE Stream
           ▼
 ┌───────────────────┐
-│   runReactor()    │  ← ReAct 主循环 (reactor.ts)
+│  runAgentLoop()   │  ← agent-loop.ts（MiniMax + 工具）
 │                   │
-│  ┌─────────────┐  │
-│  │  Scheduler  │  │  ← 状态转移决策 (scheduler.ts)
-│  └──────┬──────┘  │
-│         │ schedule()
-│         ▼         │
 │  ┌─────────────────────────────┐
-│  │  Tools: get-profile/repos/  │
-│  │  events/stars (GitHub API)  │
+│  │  dispatch / tools (GitHub)   │
 │  └─────────────┬───────────────┘
-│                │ 数据收集完毕
+│                │ 数据写入 AgentContext
 │                ▼
 │  ┌───────────────────────┐
-│  │   report-builder.ts   │  ← 报告生成
+│  │  第二段 chatStream      │  ← REPORT_PROMPT → report_chunk
 │  └───────────┬───────────┘
-│              │ final_report
+│              │ report_done / done
 └──────────────┼──────────────┘
                ▼
         SSE 推送到前端
@@ -275,7 +241,7 @@ while (phase !== "DONE" && phase !== "ERROR") {
 
 ### 4.3 报告维度（对齐 PRD）
 
-报告须包含以下四个模块，详见 `src/server/agent/report-builder.ts`：
+报告须包含以下四个模块（由 `REPORT_PROMPT` 约束 LLM 输出；数据来自 `constructDataSummary`）：
 
 | 维度     | 说明                                                          | 数据来源                        |
 | -------- | ------------------------------------------------------------- | ------------------------------- |
@@ -288,7 +254,7 @@ while (phase !== "DONE" && phase !== "ERROR") {
 
 - **编程语言 Top N**：统计所有 repos 中 `language` 字段的出现频率，按降序取前 5，百分比 = 该语言仓库数 / 有语言标注的仓库总数。
 
-- **项目领域**：通过 repos 的仓库名称、描述、topics 推断项目所属领域（如：Web 开发、AI 工具、DevOps 基础设施等）。详见 `src/server/agent/report-builder.ts` 中的 `analyzeProjectDomains`。
+- **项目领域**：通过 repos 的仓库名称、描述、topics 推断项目所属领域（如：Web 开发、AI 工具、DevOps 基础设施等）。（若存在手写报告生成器，可在 `report-builder.ts` 中实现类似 `analyzeProjectDomains` 的辅助逻辑；当前主线以 LLM 按 PRD 叙述为准。）
 
 - **开源风格计算**：
   - 自建仓库 = `fork === false` 的仓库数
@@ -297,11 +263,9 @@ while (phase !== "DONE" && phase !== "ERROR") {
 
   > **口径说明**：本期使用 `fork` 字段做近似估算，fork === true 仅表示该仓库是从他人项目复制而来，不严格识别真实协作行为（如 fork 后有提交记录或加入了 Organization）。
 
-- **偏好技术**：通过 stars 仓库的主题标签（topics）和仓库描述分析用户关注的技术方向。详见 `src/server/agent/report-builder.ts` 中的 `analyzePreferredTechnologies`。
+- **偏好技术**：通过 stars 仓库的 topics 与描述归纳；由 `REPORT_PROMPT` 要求模型在「二、技术画像」中表述。
 
-详见 `src/server/agent/report-builder.ts`。
-
-**90 天时间范围**：在 `analyzeRecentActivity` 中以 `Date.now() - 90 * 24 * 60 * 60 * 1000` 为截止时间过滤 events。
+**90 天时间范围**：可在工具层按 `Date.now() - 90 * 24 * 60 * 60 * 1000` 对比 `createdAt` 过滤 `events` 后再写入摘要；或在提示词中要求模型仅依据近 90 天数据描述「四、最近动态」。
 
 **「无公开数据」处理**：任一维度数据为空时（如 events=[]），该维度在报告中标注"无公开数据"，不显示为空或报错。
 
@@ -339,7 +303,7 @@ function schedule(ctx: AnalysisContext, client: GitHubClient): SchedulerOutput {
         },
       };
     case "FETCHING_STARS":
-      return { nextPhase: "BUILDING_REPORT", execute: () => {} }; // 报告构建在 reactor 中调用
+      return { nextPhase: "BUILDING_REPORT", execute: () => {} }; // 以下为早期 Scheduler 伪代码；当前实现见 agent-loop
   }
 }
 ```
@@ -377,41 +341,14 @@ async emit(type: SSEEvent['type'], content: string): void {
 
 每个事件发送命名 SSE 事件，详见 `src/server/lib/sse.ts`。
 
-### 5.2 thinking 阶段描述（对齐 PRD 用户可感知进度）
+### 5.2 流式进度与「思考区」
 
-thinking 事件发送的是用户可感知的进度描述，应与 PRD 中的阶段对应：
-
-| Phase            | thinking content（中文） |
-| ---------------- | ------------------------ |
-| INIT             | "正在初始化分析..."      |
-| FETCHING_PROFILE | "正在获取基本信息..."    |
-| FETCHING_REPOS   | "正在分析仓库列表..."    |
-| FETCHING_EVENTS  | "正在分析活跃时间..."    |
-| FETCHING_STARS   | "正在分析 Star 记录..."  |
-| BUILDING_REPORT  | "正在生成分析报告..."    |
-
-详见 `src/server/agent/reactor.ts` 中的 `PHASE_MESSAGES`。
+- **工具阶段**：`thinking_chunk` 承载模型 reasoning（产品文案为「AI 思考中」）；`tool_*` / `observation` 反映工具执行。
+- **报告阶段**：`report_chunk` 为 Markdown 正文；报告阶段的 reasoning 仍可经 `thinking_chunk` 追加，思考区不随报告开始而被清空（见 `useAnalysis` 与 `AgentStream`）。
 
 ### 5.3 前端接收方式
 
-前端必须使用 `addEventListener` 监听命名事件，不能使用 `onmessage`：
-
-```javascript
-eventSource.addEventListener("thinking", (e) => {
-  /* ... */
-});
-eventSource.addEventListener("observation", (e) => {
-  /* ... */
-});
-eventSource.addEventListener("final_report", (e) => {
-  /* ... */
-});
-eventSource.addEventListener("error", (e) => {
-  /* ... */
-});
-```
-
-详见 `src/app/hooks/useAnalysis.ts`
+前端必须使用 `addEventListener` 监听命名事件，不能使用 `onmessage`。除 `thinking` / `final_report` 外，还需处理 `thinking_chunk`、`report_chunk`、`report_done`、`tool_start`、`tool_end` 等，详见 `src/app/hooks/useAnalysis.ts`。
 
 ---
 
@@ -433,7 +370,7 @@ function mapErrorToUserMessage(err: Error): string {
 }
 ```
 
-详见 `src/server/agent/reactor.ts`。
+错误文案以 `analyze.get.ts` / `agent-loop.ts` 中实际 emit 为准。
 
 ---
 
@@ -507,7 +444,7 @@ class GitHubClient {
 | 调用成功，数据为空 | API 返回 200 但 body=[]   | "已获取 0 个仓库"        | 否                         |
 | 调用失败           | API 返回 404/403/网络错误 | —                        | 是（发送 error，降级继续） |
 
-详见 `src/server/agent/reactor.ts` 中的 `mapErrorToUserMessage` 函数。
+GitHub 工具层错误映射逻辑见 `src/server/agent/tools/github.ts`；分析流程中的用户可见错误见 `agent-loop.ts` 与 `analyze.get.ts`。
 
 ---
 
@@ -527,11 +464,10 @@ class GitHubClient {
 
 ## 9. 前端组件
 
-| 组件             | 职责                                 |
-| ---------------- | ------------------------------------ |
-| `SearchBar`      | 用户输入 GitHub username，触发分析   |
-| `ThinkingStream` | 实时展示 thinking/observation 事件流 |
-| `ProfileReport`  | 展示最终报告，支持复制               |
+| 组件          | 职责                                                     |
+| ------------- | -------------------------------------------------------- |
+| `SearchBar`   | 用户输入 GitHub username，触发分析                       |
+| `AgentStream` | 「AI 思考中」流式区 + 工具卡片 + Markdown 报告（含复制） |
 
 详见 `src/app/components/`
 
@@ -584,9 +520,10 @@ GITHUB_TOKEN=ghp_your_token_here
 
 ```
 GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+MINIMAX_API_KEY=your_minimax_key
 ```
 
-**Token 权限要求**：`read:user` + `public_repo`
+**Token 权限要求**：`read:user` + `public_repo`（`GITHUB_TOKEN`）。`MINIMAX_API_KEY` 用于 LLM 调用。
 
 ### 12.2 部署平台
 
@@ -596,13 +533,13 @@ GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 
 ## 13. 实现索引
 
-| 设计点        | 源文件                               | 关键导出                                                                                                                                                                         |
-| ------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SSE Emitter   | `src/server/lib/sse.ts`              | `SSEEmitter.emit()`, `createSSEStream()`                                                                                                                                         |
-| ReAct 主循环  | `src/server/agent/reactor.ts`        | `runReactor()`                                                                                                                                                                   |
-| 状态调度器    | `src/server/agent/scheduler.ts`      | `schedule()`                                                                                                                                                                     |
-| 报告生成器    | `src/server/agent/report-builder.ts` | `buildReport()`, `analyzeLanguages()`, `analyzeProjectDomains()`, `analyzeOpenSourceStyle()`, `analyzePreferredTechnologies()`, `analyzeActiveTime()`, `analyzeRecentActivity()` |
-| GitHubClient  | `src/server/agent/tools/github.ts`   | `GitHubClient.fetch()`, `fetchAllPages()`                                                                                                                                        |
-| API 入口      | `src/server/api/analyze.get.ts`      | —                                                                                                                                                                                |
-| 前端 SSE Hook | `src/app/hooks/useAnalysis.ts`       | `useAnalysis()`                                                                                                                                                                  |
-| 共享类型      | `src/shared/types.ts`                | `GitHubUser`, `GitHubRepo`, `GitHubEvent`, `SSEEvent`, `Phase`, `AnalysisContext`                                                                                                |
+| 设计点         | 源文件                               | 关键导出                                                                  |
+| -------------- | ------------------------------------ | ------------------------------------------------------------------------- |
+| SSE Emitter    | `src/server/lib/sse.ts`              | `SSEEmitter.emit()`, `createSSEStream()`                                  |
+| Agent 主循环   | `src/server/agent/agent-loop.ts`     | `runAgentLoop()`                                                          |
+| MiniMax 客户端 | `src/server/agent/minimax-client.ts` | `MiniMaxClient.chatStream()`                                              |
+| 工具调度       | `src/server/agent/dispatch.ts`       | `executeTool()`, `TOOL_HANDLERS`                                          |
+| GitHubClient   | `src/server/agent/tools/github.ts`   | `GitHubClient.fetch()`, `fetchAllPages()`                                 |
+| API 入口       | `src/server/api/analyze.get.ts`      | —                                                                         |
+| 前端 SSE Hook  | `src/app/hooks/useAnalysis.ts`       | `useAnalysis()`                                                           |
+| 共享类型       | `src/shared/types.ts`                | `GitHubUser`, `GitHubRepo`, `GitHubEvent`, `SSEEventType`, `AgentContext` |
