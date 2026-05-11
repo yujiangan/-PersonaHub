@@ -70,6 +70,12 @@ interface MiniMaxDelta {
   }>;
 }
 
+function getStreamTextChunk(current: string, previous: string): string {
+  if (!current || current === previous) return "";
+  if (current.startsWith(previous)) return current.slice(previous.length);
+  return current;
+}
+
 export class MiniMaxClient {
   private baseUrl = OPENAI_BASE_URL;
 
@@ -179,9 +185,106 @@ export class MiniMaxClient {
       const decoder = new TextDecoder();
       let buffer = "";
       let lastContent = "";
-      let lastReasoning = "";
+      const lastReasoningByKey = new Map<string, string>();
       const pendingToolCalls = new Map<string, ToolCall>();
       const indexToToolId = new Map<number, string>();
+
+      function* processLine(line: string): Generator<StreamChunk> {
+        if (!line.startsWith("data: ")) return;
+        const data = line.slice(6).trim();
+        if (data === "[DONE]") {
+          for (const tc of pendingToolCalls.values()) {
+            yield { type: "tool_call", toolCall: tc, done: false };
+          }
+          pendingToolCalls.clear();
+          yield { type: "done", done: true };
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(data);
+          const choice = parsed.choices?.[0];
+          if (!choice) return;
+
+          const delta = choice.delta as MiniMaxDelta | undefined;
+
+          if (delta?.reasoning_details?.length) {
+            for (const detail of delta.reasoning_details) {
+              const reasoningText = detail.text || "";
+              const key = detail.id ?? String(detail.index ?? 0);
+              const previous = lastReasoningByKey.get(key) || "";
+              const reasoningChunk = getStreamTextChunk(reasoningText, previous);
+              lastReasoningByKey.set(key, reasoningText);
+              if (reasoningChunk) {
+                yield { type: "reasoning", reasoning: reasoningChunk, done: false };
+              }
+            }
+          }
+
+          // tool_calls：首包常带 id+name；后续 arguments 可能只有 index（OpenAI 兼容 SSE）
+          if (delta?.tool_calls?.length) {
+            for (const tc of delta.tool_calls) {
+              if (tc.id && tc.function?.name) {
+                const toolCall: ToolCall = {
+                  id: tc.id,
+                  type: "function",
+                  function: {
+                    name: tc.function.name,
+                    arguments: tc.function.arguments || "",
+                  },
+                };
+                pendingToolCalls.set(tc.id, toolCall);
+                if (tc.index !== undefined) {
+                  indexToToolId.set(tc.index, tc.id);
+                }
+              } else {
+                const resolvedId =
+                  tc.id ?? (tc.index !== undefined ? indexToToolId.get(tc.index) : undefined);
+                if (resolvedId && tc.function?.arguments) {
+                  const existing = pendingToolCalls.get(resolvedId);
+                  if (existing) {
+                    existing.function.arguments += tc.function.arguments;
+                  }
+                }
+              }
+            }
+          }
+
+          // yield 已完成 arguments 的 tool_call（arguments 必须以}结尾才算完整）
+          for (const [id, tc] of pendingToolCalls) {
+            const args = tc.function.arguments;
+            if (args.endsWith("}")) {
+              try {
+                JSON.parse(args); // 验证是有效 JSON
+                pendingToolCalls.delete(id);
+                yield { type: "tool_call", toolCall: tc, done: false };
+              } catch {
+                // JSON 不完整，继续等
+              }
+            }
+          }
+
+          if (delta?.content) {
+            const contentChunk = getStreamTextChunk(delta.content, lastContent);
+            lastContent = delta.content;
+            if (contentChunk) {
+              yield { type: "content", content: contentChunk, done: false };
+            }
+          }
+
+          // 检查是否结束（stop 或 tool_calls 后连接可能立即关闭，故在循环外也会 flush）
+          if (choice.finish_reason === "stop") {
+            for (const tc of pendingToolCalls.values()) {
+              yield { type: "tool_call", toolCall: tc, done: false };
+            }
+            pendingToolCalls.clear();
+            yield { type: "done", done: true };
+          }
+        } catch (e) {
+          // 忽略解析错误，继续处理下一行
+          console.warn("Failed to parse SSE data:", e);
+        }
+      }
 
       try {
         while (true) {
@@ -193,111 +296,17 @@ export class MiniMaxClient {
           buffer = lines.pop() || "";
 
           for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const data = line.slice(6).trim();
-            if (data === "[DONE]") {
-              for (const tc of pendingToolCalls.values()) {
-                yield { type: "tool_call", toolCall: tc, done: false };
-              }
-              pendingToolCalls.clear();
-              yield { type: "done", done: true };
-              return;
+            for (const chunk of processLine(line)) {
+              yield chunk;
+              if (chunk.done) return;
             }
+          }
+        }
 
-            try {
-              const parsed = JSON.parse(data);
-              const choice = parsed.choices?.[0];
-              if (!choice) continue;
-
-              const delta = choice.delta as MiniMaxDelta | undefined;
-
-              // reasoning_details：与 content 类似，多为累积全文，只 yield 新增片段
-              if (delta?.reasoning_details?.length) {
-                const reasoningText = delta.reasoning_details[0].text || "";
-                if (reasoningText) {
-                  if (reasoningText.length <= lastReasoning.length) {
-                    lastReasoning = reasoningText;
-                    yield { type: "reasoning", reasoning: reasoningText, done: false };
-                  } else {
-                    const newReasoning = reasoningText.slice(lastReasoning.length);
-                    lastReasoning = reasoningText;
-                    if (newReasoning) {
-                      yield { type: "reasoning", reasoning: newReasoning, done: false };
-                    }
-                  }
-                }
-              }
-
-              // tool_calls：首包常带 id+name；后续 arguments 可能只有 index（OpenAI 兼容 SSE）
-              if (delta?.tool_calls?.length) {
-                for (const tc of delta.tool_calls) {
-                  if (tc.id && tc.function?.name) {
-                    const toolCall: ToolCall = {
-                      id: tc.id,
-                      type: "function",
-                      function: {
-                        name: tc.function.name,
-                        arguments: tc.function.arguments || "",
-                      },
-                    };
-                    pendingToolCalls.set(tc.id, toolCall);
-                    if (tc.index !== undefined) {
-                      indexToToolId.set(tc.index, tc.id);
-                    }
-                  } else {
-                    const resolvedId =
-                      tc.id ?? (tc.index !== undefined ? indexToToolId.get(tc.index) : undefined);
-                    if (resolvedId && tc.function?.arguments) {
-                      const existing = pendingToolCalls.get(resolvedId);
-                      if (existing) {
-                        existing.function.arguments += tc.function.arguments;
-                      }
-                    }
-                  }
-                }
-              }
-
-              // yield 已完成 arguments 的 tool_call（arguments 必须以}结尾才算完整）
-              for (const [id, tc] of pendingToolCalls) {
-                const args = tc.function.arguments;
-                if (args.endsWith("}")) {
-                  try {
-                    JSON.parse(args); // 验证是有效 JSON
-                    pendingToolCalls.delete(id);
-                    yield { type: "tool_call", toolCall: tc, done: false };
-                  } catch {
-                    // JSON 不完整，继续等
-                  }
-                }
-              }
-
-              // 处理 content（增量累积，MiniMax 的 content 不是单调递增的）
-              if (delta?.content) {
-                if (delta.content.length <= lastContent.length) {
-                  lastContent = delta.content;
-                  yield { type: "content", content: delta.content, done: false };
-                } else {
-                  const newContent = delta.content.slice(lastContent.length);
-                  lastContent = delta.content;
-                  if (newContent) {
-                    yield { type: "content", content: newContent, done: false };
-                  }
-                }
-              }
-
-              // 检查是否结束（stop 或 tool_calls 后连接可能立即关闭，故在循环外也会 flush）
-              if (choice.finish_reason === "stop") {
-                for (const tc of pendingToolCalls.values()) {
-                  yield { type: "tool_call", toolCall: tc, done: false };
-                }
-                pendingToolCalls.clear();
-                yield { type: "done", done: true };
-                return;
-              }
-            } catch (e) {
-              // 忽略解析错误，继续处理下一行
-              console.warn("Failed to parse SSE data:", e);
-            }
+        if (buffer.trim()) {
+          for (const chunk of processLine(buffer)) {
+            yield chunk;
+            if (chunk.done) return;
           }
         }
 

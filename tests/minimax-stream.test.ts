@@ -24,6 +24,103 @@ describe("MiniMaxClient.chatStream", () => {
     );
   }
 
+  async function collectChunks(bodyText: string) {
+    mockFetchWithSse(bodyText);
+    const client = new MiniMaxClient("test-key");
+    const chunks: StreamChunk[] = [];
+    for await (const c of client.chatStream([{ role: "user", content: "hi" }], [])) {
+      chunks.push(c);
+    }
+    return chunks;
+  }
+
+  function sseData(payloads: unknown[]) {
+    return payloads.map((payload) => `data: ${JSON.stringify(payload)}\n`).join("\n");
+  }
+
+  it("does not truncate content deltas that are not cumulative prefixes", async () => {
+    const chunks = await collectChunks(
+      sseData([
+        { choices: [{ delta: { content: "我是" } }] },
+        { choices: [{ delta: { content: "一个开发者" } }] },
+        { choices: [{ finish_reason: "stop", delta: {} }] },
+      ]),
+    );
+
+    const content = chunks
+      .filter((c): c is Extract<StreamChunk, { type: "content" }> => c.type === "content")
+      .map((c) => c.content)
+      .join("");
+
+    expect(content).toBe("我是一个开发者");
+  });
+
+  it("still emits only appended content when MiniMax sends cumulative text", async () => {
+    const chunks = await collectChunks(
+      sseData([
+        { choices: [{ delta: { content: "我是" } }] },
+        { choices: [{ delta: { content: "我是一个开发者" } }] },
+        { choices: [{ finish_reason: "stop", delta: {} }] },
+      ]),
+    );
+
+    const contents = chunks
+      .filter((c): c is Extract<StreamChunk, { type: "content" }> => c.type === "content")
+      .map((c) => c.content);
+
+    expect(contents).toEqual(["我是", "一个开发者"]);
+  });
+
+  it("does not drop reasoning_details after the first item", async () => {
+    const chunks = await collectChunks(
+      sseData([
+        {
+          choices: [
+            {
+              delta: {
+                reasoning_details: [
+                  { id: "r1", index: 0, text: "先看仓库" },
+                  { id: "r2", index: 1, text: "再看贡献" },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          choices: [
+            {
+              delta: {
+                reasoning_details: [
+                  { id: "r1", index: 0, text: "先看仓库结构" },
+                  { id: "r2", index: 1, text: "再看贡献记录" },
+                ],
+              },
+            },
+          ],
+        },
+        { choices: [{ finish_reason: "stop", delta: {} }] },
+      ]),
+    );
+
+    const reasoning = chunks
+      .filter((c): c is Extract<StreamChunk, { type: "reasoning" }> => c.type === "reasoning")
+      .map((c) => c.reasoning);
+
+    expect(reasoning).toEqual(["先看仓库", "再看贡献", "结构", "记录"]);
+  });
+
+  it("processes the final data line even when the stream has no trailing newline", async () => {
+    const chunks = await collectChunks(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "最后一段" } }] })}`,
+    );
+
+    const content = chunks.find(
+      (c): c is Extract<StreamChunk, { type: "content" }> => c.type === "content",
+    );
+
+    expect(content?.content).toBe("最后一段");
+  });
+
   it("flushes pending tool_calls when stream ends without [DONE] (incomplete JSON arguments)", async () => {
     const payload = {
       choices: [
