@@ -7,6 +7,12 @@ export type SSEEventType =
   | "observation"
   | "step"
   | "final_report"
+  | "thinking_chunk"
+  | "thinking_done"
+  | "tool_result_done"
+  | "report_chunk"
+  | "report_done"
+  | "report_error"
   | "error"
   | "done";
 
@@ -35,6 +41,8 @@ interface AnalysisState {
   error: string | null;
   // Observations indexed by toolCallId for easy lookup
   observationsByTool: Record<string, AgentEvent[]>;
+  // Streaming fields
+  thinkingContent: string;
 }
 
 interface SSEWrapper {
@@ -50,6 +58,7 @@ const initialState: AnalysisState = {
   isDone: false,
   error: null,
   observationsByTool: {},
+  thinkingContent: "",
 };
 
 function safeParseJSON<T>(data: string, fallback: T): T {
@@ -82,7 +91,7 @@ export function useAnalysis(githubId: string | null) {
     pendingToolsRef.current.clear();
     currentToolCallIdRef.current = null;
     hasReceivedFinalReportRef.current = false;
-    setState({ ...initialState, observationsByTool: {} });
+    setState({ ...initialState, observationsByTool: {}, thinkingContent: "" });
   }, []);
 
   const connect = useCallback(
@@ -155,6 +164,7 @@ export function useAnalysis(githubId: string | null) {
         if (!wrapper) return;
         const toolData = safeParseJSON<Record<string, unknown>>(wrapper.content, {});
         const toolCallId = toolData.toolCallId as string | undefined;
+        const toolResult = (toolData.toolResult ?? toolData.result) as unknown;
         setState((prev) => {
           // Remove tool_start event if it exists
           const newEvents = toolCallId
@@ -173,7 +183,7 @@ export function useAnalysis(githubId: string | null) {
             toolCallId,
             toolName: toolData.toolName as string | undefined,
             toolSuccess: toolData.toolSuccess as boolean | undefined,
-            toolResult: toolData.toolResult as unknown,
+            toolResult,
             toolSummary: toolData.toolSummary as string | undefined,
             toolError: toolData.toolError as string | null | undefined,
           };
@@ -229,6 +239,53 @@ export function useAnalysis(githubId: string | null) {
         if (!wrapper) return;
         hasReceivedFinalReportRef.current = true;
         setState((prev) => ({ ...prev, finalReport: wrapper.content, isGeneratingReport: false }));
+      });
+
+      // 流式事件监听器
+      eventSource.addEventListener("thinking_chunk", (e) => {
+        const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
+        if (!wrapper) return;
+        setState((prev) => ({
+          ...prev,
+          thinkingContent: prev.thinkingContent + wrapper.content,
+        }));
+      });
+
+      eventSource.addEventListener("thinking_done", () => {
+        // thinking 完成，可以结束 thinking 显示或转场
+        // 目前只需要更新状态即可
+      });
+
+      eventSource.addEventListener("report_chunk", (e) => {
+        const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
+        if (!wrapper) return;
+        if (!hasReceivedFinalReportRef.current) {
+          hasReceivedFinalReportRef.current = true;
+        }
+        setState((prev) => ({
+          ...prev,
+          finalReport: prev.finalReport + wrapper.content,
+          isGeneratingReport: true,
+        }));
+      });
+
+      eventSource.addEventListener("report_done", () => {
+        hasReceivedFinalReportRef.current = true;
+        setState((prev) => ({
+          ...prev,
+          isGeneratingReport: false,
+          isDone: true,
+        }));
+      });
+
+      eventSource.addEventListener("report_error", (e) => {
+        const wrapper = safeParseJSON<SSEWrapper | null>(e.data, null);
+        if (!wrapper) return;
+        setState((prev) => ({
+          ...prev,
+          error: wrapper.content,
+          isGeneratingReport: false,
+        }));
       });
 
       eventSource.addEventListener("error", (e: MessageEvent) => {

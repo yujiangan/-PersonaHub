@@ -25,10 +25,19 @@ export default defineEventHandler(async (event) => {
 
   const { stream, emitter } = createSSEStream();
 
-  runAgentLoop(githubId, emitter).catch((err) => {
+  runAgentLoop(githubId, emitter).catch(async (err) => {
     console.error("Agent 错误:", err);
     const errorMessage = err instanceof Error ? err.message : String(err);
-    emitter.emit("error", `服务异常: ${errorMessage}`);
+    try {
+      await emitter.emit("error", `服务异常: ${errorMessage}`);
+    } catch (emitErr) {
+      console.error("emit error 失败:", emitErr);
+    }
+    try {
+      await emitter.emit("done", "");
+    } catch (emitErr) {
+      console.error("emit done 失败:", emitErr);
+    }
   });
 
   setHeaders(event, {

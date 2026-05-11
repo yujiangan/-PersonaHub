@@ -5,8 +5,15 @@ import { useAnalysis } from "./hooks/useAnalysis";
 
 function App() {
   const [githubId, setGithubId] = useState<string | null>(null);
-  const { finalReport, error, isDone, isGeneratingReport, events, observationsByTool } =
-    useAnalysis(githubId);
+  const {
+    finalReport,
+    error,
+    isDone,
+    isGeneratingReport,
+    events,
+    observationsByTool,
+    thinkingContent,
+  } = useAnalysis(githubId);
 
   const handleSearch = (id: string) => {
     // Reset to null first to allow re-analysis with the same username
@@ -47,6 +54,7 @@ function App() {
           isGeneratingReport={isGeneratingReport}
           events={events}
           observationsByTool={observationsByTool}
+          thinkingContent={thinkingContent}
         />
       </div>
     </div>

@@ -82,13 +82,16 @@ export interface AgentEvent {
 export type SSEEventType =
   | "step"
   | "tool_start"
+  | "thinking"
+  | "tool_end"
+  | "observation"
+  | "final_report"
   | "thinking_chunk"
   | "thinking_done"
   | "tool_result_done"
   | "report_chunk"
   | "report_done"
   | "report_error"
-  | "observation"
   | "error"
   | "done";
 
