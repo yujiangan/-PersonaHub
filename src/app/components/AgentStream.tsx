@@ -1,11 +1,9 @@
 import { useState, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Pluggable } from "unified";
 import ThinkingCard from "./ThinkingCard";
 import ToolCard from "./ToolCard";
 import ObservationLine from "./ObservationLine";
-import GeneratingHint from "./GeneratingHint";
 import { useScroll } from "../hooks/useScroll";
 import type { AgentEvent } from "../hooks/useAnalysis";
 import "./agent-stream.css";
@@ -17,6 +15,7 @@ interface AgentStreamProps {
   isGeneratingReport: boolean;
   events: AgentEvent[];
   observationsByTool?: Record<string, AgentEvent[]>;
+  thinkingContent?: string;
 }
 
 function FinalReport({ report }: { report: string }) {
@@ -32,7 +31,6 @@ function FinalReport({ report }: { report: string }) {
     }
   };
 
-  // 预处理 markdown，修复表格格式问题
   return (
     <div className="final-report-container">
       <div className="reply-block">
@@ -42,7 +40,7 @@ function FinalReport({ report }: { report: string }) {
           </button>
         </div>
         <div className="markdown-body">
-          <ReactMarkdown remarkPlugins={[remarkGfm as Pluggable]}>{report}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{report}</ReactMarkdown>
         </div>
       </div>
     </div>
@@ -99,9 +97,10 @@ export default function AgentStream({
   finalReport,
   isDone,
   error,
-  isGeneratingReport,
+  isGeneratingReport: _isGeneratingReport,
   events,
   observationsByTool = {},
+  thinkingContent,
 }: AgentStreamProps) {
   const { containerRef, autoScrollEnabled, setAutoScrollEnabled, handleScroll, scrollToBottom } =
     useScroll();
@@ -109,9 +108,9 @@ export default function AgentStream({
   // 新内容到达时自动滚动
   useEffect(() => {
     scrollToBottom();
-  }, [finalReport, scrollToBottom]);
+  }, [finalReport, thinkingContent, scrollToBottom]);
 
-  if (!finalReport && !error && events.length === 0) return null;
+  if (!finalReport && !error && events.length === 0 && !thinkingContent) return null;
 
   return (
     <div className="agent-stream">
@@ -119,6 +118,9 @@ export default function AgentStream({
 
       <div ref={containerRef} onScroll={handleScroll} className="agent-stream-container">
         <div className="events-container">
+          {/* 思考内容流式显示 - 使用 ThinkingCard 组件支持折叠 */}
+          {thinkingContent && <ThinkingCard content={thinkingContent} />}
+
           {events.map((event) => {
             const obs = event.toolCallId ? observationsByTool[event.toolCallId] : undefined;
             return (
@@ -129,23 +131,9 @@ export default function AgentStream({
           })}
         </div>
 
-        {isGeneratingReport && <GeneratingHint />}
-
-        {isDone && finalReport && <FinalReport report={finalReport} />}
+        {/* 报告流式输出，边来边显示 */}
+        {finalReport && <FinalReport report={finalReport} />}
       </div>
-
-      {/* 新内容提示（当停止自动滚动时显示） */}
-      {!autoScrollEnabled && !isDone && (
-        <button
-          className="scroll-to-bottom-hint"
-          onClick={() => {
-            setAutoScrollEnabled(true);
-            scrollToBottom();
-          }}
-        >
-          ↓ 新内容
-        </button>
-      )}
     </div>
   );
 }

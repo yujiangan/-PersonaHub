@@ -1,11 +1,15 @@
-import { MiniMaxClient } from "./minimax-client";
+import {
+  MiniMaxClient,
+  type MiniMaxMessage as ApiMiniMaxMessage,
+  type ToolCall,
+} from "./minimax-client";
 import { GITHUB_TOOLS } from "./tools-schema";
 import { executeTool, ToolContext } from "./dispatch";
 import { GitHubClient } from "./tools/github";
 import { SSEEmitter } from "~/server/lib/sse";
-import type { AgentContext } from "~/shared/types";
+import { GitHubError, type AgentContext } from "~/shared/types";
 
-type MiniMaxMessage =
+type AgentLoopMessage =
   | { role: "system" | "user"; content: string }
   | { role: "assistant"; content: string | null; tool_calls: MiniMaxToolCall[] }
   | { role: "tool"; tool_call_id: string; name?: string; content: string };
@@ -54,65 +58,57 @@ const SYSTEM_PROMPT = `你是一个 GitHub 技术画像分析助手。根据 Git
 - 始终用中文输出报告
 `;
 
-const REPORT_PROMPT = `
-你是一位资深的资深架构师和技术猎头，擅长通过 GitHub 数据洞察开发者的真实技术实力与成长潜力。
-请基于以下提供的 GitHub 数据，生成一份逻辑严密、具有前瞻性洞察的分析报告。
-
-## **撰写准则：**
-1. **拒绝罗列**：严禁直接复述原始数字，必须通过数字推导结论（例如：从 Star 偏好推导其技术风向标）。
-2. **专业语境**：使用开发者熟悉的术语（如：技术栈迁移，工程化能力，开源参与度等）。
-3. **视觉层次**：严格遵循 Markdown 语法，利用标题、加粗、表格和列表构建良好的阅读节奏。
-
----
-
-# **GitHub 开发者技术画像报告**
-
-用户：{{USERNAME}}
-
-{{DATA}}
-
-## **一、 核心影响指数**
-| 关键指标 | 数据表现 | 行业洞察 |
-| :--- | :--- | :--- |
-| **基础规模** | 仓库 {public_repos} / 粉丝 {followers} | [点评其在社区中的影响力和沉淀深度] |
-| **开源倾向** | [自建 vs 贡献] | [分析是独立开发者型、协作贡献型还是学习笔记型] |
-| **技术专注度** | [语言分布比例] | [评价其技术栈的单一深度或广度平衡性] |
-
-## **二、 技术栈深度解析**
-
-### **1. 核心语言与工程能力**
-[分析 Top N 语言。不要只说百分比，要讨论这些语言组合反映了什么样的开发习惯，例如：TS + Go 反映了现代全栈开发倾向。]
-
-### **2. 技术图谱与领域专注**
-- **专注领域**：[前端/后端/基础设施/AI/安全等，需给出推断依据]
-- **Star 实验室**：[通过 Star 仓库分析其最近在关注什么前沿技术，反映了怎样的审美和技术追求]
-
-## **三、 研发节奏与活跃度 (UTC)**
-> **活跃时段：** [工作时间 / 业余时间 / 跨时区协作]
-> **活跃特征：** [稳定输出型 / 爆发增长型 / 维护回馈型]
-
-[结合最近 90 天的数据，分析其研发状态是否处于上升期，以及对开源社区的响应速度。]
-
-## **四、 近期实战动态 (Last 90 Days)**
-
-### **核心产出项目**
-- **[项目名称]**：[该项目在技术上的亮点或对开发者的意义]
-- **[项目名称]**：[简述其贡献性质]
-
-### **技术热点雷达**
-- [列表：最近投入最多的技术领域或工具链]
-
-## **五、 综合评价与建议**
-[以资深开发者的身份，给出 2-3 条关于其技术发展、开源贡献或职业竞争力的核心洞察。]
-
----
-
-**格式约束：**
-1. 严禁使用 \`\`\` 代码块包裹整个报告，直接输出 Markdown。
-2. 表格必须包含标准的 \`| --- | --- |\` 分隔行。
-3. 关键结论必须使用 **加粗**。
-4. 无数据的模块标注"暂无公开数据"，严禁虚构。
-`;
+const REPORT_PROMPT =
+  "基于以下 GitHub 数据，生成一份有洞察力的分析报告。不要罗列原始数据，要给出真正的分析判断。\n\n" +
+  "{{DATA}}\n\n" +
+  "请按以下格式撰写分析报告，必须严格遵循 Markdown 语法：\n\n" +
+  "---\n" +
+  "# {{USERNAME}} GitHub 深度分析报告\n\n" +
+  "## 1. 技术栈与专长领域\n\n" +
+  "### 技术路径\n" +
+  "| 阶段 | 时间特征 | 技术栈 | 说明 |\n" +
+  "|------|----------|--------|------|\n" +
+  "| - | - | - | - |\n\n" +
+  "### 技术栈扩展\n" +
+  "```\n" +
+  "[用 ASCII 箭头展示技术路径，例如：]\n" +
+  "JS --> TS --> AI/Agent\n" +
+  "  \\       /\n" +
+  "   \\     /\n" +
+  "    Angular --> React --> Fullstack\n" +
+  "```\n\n" +
+  "**核心结论：**\n" +
+  "[一句话总结技术路径]\n\n" +
+  "## 2. 近期关注方向\n\n" +
+  "### 核心焦点\n" +
+  "| 类别 | 关注项目 | 意图推断 |\n" +
+  "|------|----------|----------|\n" +
+  "| - | - | - |\n\n" +
+  "### 其他关注\n" +
+  "- [列表项]\n\n" +
+  "## 3. 技术偏好\n\n" +
+  "### 偏好类型\n" +
+  "| 偏好 | 表现 | 解读 |\n" +
+  "|------|------|------|\n" +
+  "| - | - | - |\n\n" +
+  "**核心判断：**\n" +
+  "[总结判断]\n\n" +
+  "## 4. 值得关注的项目\n\n" +
+  "| 项目 | 语言 | Stars | 价值 |\n" +
+  "|------|------|-------|------|\n" +
+  "| - | - | - | - |\n\n" +
+  "## 5. 总结\n\n" +
+  "**一句话定位：**\n" +
+  "[用一句精炼的话总结]\n\n" +
+  "---\n\n" +
+  "格式要求（必须遵守，否则表格会渲染错误）：\n" +
+  "1. 所有图表/路径图必须用 ``` 代码块包裹，否则会被渲染错误\n" +
+  "2. 表格分隔符必须用 | 分隔，每个 | 前后必须有空格，如：| 项目 | 语言 | Stars | 价值 |\n" +
+  "3. 表格分隔符行（---|---|）每段至少3个横杠，不能少于3个\n" +
+  "4. 绝对禁止出现 |---| 这样没有空格的格式，必须写成 | --- | 这样的格式\n" +
+  "5. 用 **粗体** 突出关键洞察和结论\n" +
+  "6. 不要大段连续文字，用列表和表格分隔信息\n" +
+  "7. 像资深开发者在点评，不要罗列原始数据";
 
 function constructDataSummary(ctx: AgentContext): string {
   const parts: string[] = [];
@@ -121,7 +117,7 @@ function constructDataSummary(ctx: AgentContext): string {
     parts.push(`【用户信息】
 用户名: ${ctx.profile.login}
 简介: ${ctx.profile.bio || "无"}
-粉丝: ${ctx.profile.followers} | 关注: ${ctx.profile.following} | 仓库: ${ctx.profile.publicRepos}`);
+粉丝: ${ctx.profile.followers} / 关注: ${ctx.profile.following} / 仓库: ${ctx.profile.publicRepos}`);
   }
 
   if (ctx.repos.length > 0) {
@@ -130,7 +126,7 @@ function constructDataSummary(ctx: AgentContext): string {
       .map((r) => {
         const lang = r.language || "未知";
         const stars = r.stargazersCount;
-        const desc = r.description || "无描述";
+        const desc = (r.description || "无描述").replace(/\|/g, "、");
         return `- ${r.name} (${lang}, ★${stars}): ${desc}`;
       })
       .join("\n");
@@ -156,7 +152,7 @@ ${eventList}`);
     const starList = topStars
       .map((s) => {
         const lang = s.language || "未知";
-        const desc = s.description || "无描述";
+        const desc = (s.description || "无描述").replace(/\|/g, "、");
         return `- ${s.fullName} (${lang}): ${desc}`;
       })
       .join("\n");
@@ -192,29 +188,54 @@ function generateSummary(toolName: string, result: unknown): string {
   }
 }
 
+/** 流式 arguments 拼完后仍可能偶发非法 JSON，避免整次分析中断 */
+function safeParseToolArguments(args: string): Record<string, unknown> {
+  const s = (args ?? "").trim();
+  if (!s) return {};
+  try {
+    return JSON.parse(s) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function toolInputWithGithubFallback(
+  parsed: Record<string, unknown>,
+  githubId: string,
+): Record<string, unknown> {
+  const u = parsed.username;
+  const username = typeof u === "string" && u.trim().length > 0 ? u.trim() : githubId;
+  return { ...parsed, username };
+}
+
+function toolCallToMiniMax(tc: ToolCall): MiniMaxToolCall {
+  return {
+    id: tc.id,
+    type: "function",
+    function: {
+      name: tc.function.name,
+      arguments: tc.function.arguments,
+    },
+  };
+}
+
 export async function runAgentLoop(githubId: string, emitter: SSEEmitter): Promise<void> {
   const minimaxClient = new MiniMaxClient(process.env.MINIMAX_API_KEY || "");
   const githubClient = new GitHubClient(process.env.GITHUB_TOKEN || "");
   const cleanId = githubId.trim();
 
-  // Check if user exists first
   try {
-    const profile = await githubClient.fetch<{ login: string }>(`/users/${cleanId}`);
-    if (!profile.login) {
-      throw new Error("User not found");
+    await githubClient.fetch(`/users/${cleanId}`);
+  } catch (e) {
+    if (e instanceof GitHubError && e.status === 404) {
+      await emitter.emit("error", "用户不存在，请检查 GitHub ID 是否正确。");
+      await emitter.emit("done", "");
+      return;
     }
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : "未知错误";
-    const statusMatch = errorMsg.match(/404|Not Found/i);
-    await emitter.emit(
-      "error",
-      statusMatch ? `用户 "${cleanId}" 不存在或无公开数据` : `获取用户信息失败: ${errorMsg}`,
-    );
-    await emitter.emit("done", "");
-    return;
+    throw e;
   }
 
-  const messages: any[] = [
+  const messages: AgentLoopMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: `分析 GitHub 用户: ${cleanId}` },
   ];
@@ -250,13 +271,23 @@ export async function runAgentLoop(githubId: string, emitter: SSEEmitter): Promi
       }),
     );
 
-    const response = await minimaxClient.chat(messages, allTools);
-    const { content, toolCalls, finishReason } = response;
+    const pendingToolCalls = new Map<string, ToolCall>();
+    let assistantContent = "";
 
-    if (finishReason !== "tool_calls") {
-      // 发送 thinking 事件触发 "正在生成分析" 提示
-      await emitter.emit("thinking", `正在生成分析...`);
+    for await (const chunk of minimaxClient.chatStream(messages as ApiMiniMaxMessage[], allTools)) {
+      if (chunk.done) {
+        break;
+      }
+      if (chunk.type === "reasoning" && chunk.reasoning) {
+        await emitter.emit("thinking_chunk", chunk.reasoning);
+      } else if (chunk.type === "tool_call") {
+        pendingToolCalls.set(chunk.toolCall.id, chunk.toolCall);
+      } else if (chunk.type === "content" && chunk.content) {
+        assistantContent += chunk.content;
+      }
+    }
 
+    if (pendingToolCalls.size === 0) {
       const dataSummary = constructDataSummary(agentCtx);
 
       const analysisMessages = [
@@ -267,23 +298,33 @@ export async function runAgentLoop(githubId: string, emitter: SSEEmitter): Promi
         },
       ];
 
-      const analysisResponse = await minimaxClient.chat(analysisMessages, []);
-      const analysisContent = analysisResponse.content || "无法生成分析报告";
+      for await (const chunk of minimaxClient.chatStream(
+        analysisMessages as ApiMiniMaxMessage[],
+        [],
+      )) {
+        if (chunk.done) {
+          break;
+        }
+        if (chunk.type === "content" && chunk.content) {
+          await emitter.emit("report_chunk", chunk.content);
+        } else if (chunk.type === "reasoning" && chunk.reasoning) {
+          await emitter.emit("thinking_chunk", chunk.reasoning);
+        }
+      }
 
-      await emitter.emit("final_report", analysisContent);
+      await emitter.emit("report_done", "");
       await emitter.emit("done", "");
       return;
     }
 
-    if (response.reasoning?.length) {
-      await emitter.emit("thinking", `LLM 思考: ${response.reasoning.join(" ")}`);
-    }
+    const toolCalls = [...pendingToolCalls.values()];
 
     const toolResults = await Promise.all(
       toolCalls.map(async (toolCall) => {
         const name = toolCall.function.name;
         const id = toolCall.id;
-        const input = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
+        const parsed = safeParseToolArguments(toolCall.function.arguments);
+        const input = toolInputWithGithubFallback(parsed, cleanId);
 
         await emitter.emit(
           "tool_start",
@@ -304,6 +345,7 @@ export async function runAgentLoop(githubId: string, emitter: SSEEmitter): Promi
             toolName: name,
             toolSuccess: execResult.success,
             result: execResult.result,
+            toolResult: execResult.result,
             summary,
             error: execResult.error,
           }),
@@ -313,17 +355,10 @@ export async function runAgentLoop(githubId: string, emitter: SSEEmitter): Promi
       }),
     );
 
-    const assistantMessage: MiniMaxMessage = {
+    const assistantMessage: AgentLoopMessage = {
       role: "assistant",
-      content: content || null,
-      tool_calls: toolCalls.map((tc) => ({
-        id: tc.id,
-        type: "function",
-        function: {
-          name: tc.function.name,
-          arguments: tc.function.arguments,
-        },
-      })),
+      content: assistantContent.trim() || null,
+      tool_calls: toolCalls.map(toolCallToMiniMax),
     };
     messages.push(assistantMessage);
 

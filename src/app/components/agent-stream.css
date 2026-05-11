@@ -222,6 +222,33 @@
   overflow: hidden;
 }
 
+/* 流式思考内容显示（不用 ThinkingCard 组件） */
+.thinking-stream-card {
+  background: linear-gradient(135deg, rgba(20, 25, 32, 0.95) 0%, rgba(30, 35, 45, 0.95) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.thinking-stream-card .thinking-label {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.thinking-stream-card .thinking-content {
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .thinking-header {
   display: flex;
   align-items: center;
