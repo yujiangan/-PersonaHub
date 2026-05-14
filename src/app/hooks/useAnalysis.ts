@@ -69,6 +69,23 @@ function safeParseJSON<T>(data: string, fallback: T): T {
   }
 }
 
+/** 仅工具链相关事件：多轮工具之间的新 reasoning 合并进同一张「使用工具后的思考」卡片 */
+function isToolishTimelineEvent(e: AgentEvent): boolean {
+  return (
+    e.type === "tool_start" ||
+    e.type === "tool_end" ||
+    e.type === "observation" ||
+    e.type === "step"
+  );
+}
+
+function hasToolEndBeforeIndex(events: AgentEvent[], idx: number): boolean {
+  for (let i = 0; i < idx; i++) {
+    if (events[i].type === "tool_end") return true;
+  }
+  return false;
+}
+
 export function useAnalysis(githubId: string | null) {
   const [state, setState] = useState<AnalysisState>(initialState);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -252,8 +269,57 @@ export function useAnalysis(githubId: string | null) {
       });
 
       eventSource.addEventListener("thinking_done", () => {
-        // thinking 完成，可以结束 thinking 显示或转场
-        // 目前只需要更新状态即可
+        // 将本轮流式思考固化为一条事件；多轮工具间模型会反复「复盘」同一批数据，合并到上一条「已见过工具结果」的思考里，避免两张雷同 AI 思考
+        setState((prev) => {
+          const draft = prev.thinkingContent.trim();
+          if (!draft) {
+            return { ...prev, thinkingContent: "" };
+          }
+          const ev = prev.events;
+          let lastThinkingIdx = -1;
+          for (let i = ev.length - 1; i >= 0; i--) {
+            if (ev[i].type === "thinking") {
+              lastThinkingIdx = i;
+              break;
+            }
+          }
+
+          if (lastThinkingIdx >= 0) {
+            const middle = ev.slice(lastThinkingIdx + 1);
+            const onlyToolishBetween =
+              middle.length === 0 || middle.every((e) => isToolishTimelineEvent(e));
+            const anchorFollowsToolRound = hasToolEndBeforeIndex(ev, lastThinkingIdx);
+            const anchor = ev[lastThinkingIdx];
+            if (
+              onlyToolishBetween &&
+              anchorFollowsToolRound &&
+              anchor.type === "thinking" &&
+              anchor.content != null
+            ) {
+              const merged: AgentEvent = {
+                ...anchor,
+                content: `${anchor.content}\n\n---\n\n${draft}`,
+              };
+              return {
+                ...prev,
+                events: [...ev.slice(0, lastThinkingIdx), merged],
+                thinkingContent: "",
+              };
+            }
+          }
+
+          const event: AgentEvent = {
+            id: generateEventId(),
+            type: "thinking",
+            timestamp: Date.now(),
+            content: draft,
+          };
+          return {
+            ...prev,
+            events: [...prev.events, event],
+            thinkingContent: "",
+          };
+        });
       });
 
       eventSource.addEventListener("report_chunk", (e) => {
@@ -301,7 +367,7 @@ export function useAnalysis(githubId: string | null) {
         isConnectingRef.current = false;
       });
     },
-    [resetState],
+    [resetState, generateEventId],
   );
 
   useEffect(() => {

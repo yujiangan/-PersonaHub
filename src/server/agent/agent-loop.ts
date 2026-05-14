@@ -287,6 +287,9 @@ export async function runAgentLoop(githubId: string, emitter: SSEEmitter): Promi
       }
     }
 
+    // 结束本轮 reasoning 流，便于前端固化一段思考后再展示工具调用/下一轮思考
+    await emitter.emit("thinking_done", "");
+
     if (pendingToolCalls.size === 0) {
       const dataSummary = constructDataSummary(agentCtx);
 
@@ -307,10 +310,11 @@ export async function runAgentLoop(githubId: string, emitter: SSEEmitter): Promi
         }
         if (chunk.type === "content" && chunk.content) {
           await emitter.emit("report_chunk", chunk.content);
-        } else if (chunk.type === "reasoning" && chunk.reasoning) {
-          await emitter.emit("thinking_chunk", chunk.reasoning);
         }
+        // 写报告阶段不转发 reasoning：与 report 正文高度同构，用户会感觉「同一套分析展示两遍」
       }
+
+      await emitter.emit("thinking_done", "");
 
       await emitter.emit("report_done", "");
       await emitter.emit("done", "");

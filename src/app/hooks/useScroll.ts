@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 
 const SCROLL_THRESHOLD = 100; // 像素
 
@@ -8,32 +8,26 @@ interface UseScrollOptions {
 
 export function useScroll(options: UseScrollOptions = {}) {
   const threshold = options.threshold ?? SCROLL_THRESHOLD;
-  const containerRef = useRef<HTMLDivElement>(null);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
 
-  // 判断用户是否在页面底部
+  // 判断用户是否接近文档底部（整页滚动）
   const isNearBottom = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return true;
-
-    const { scrollTop, scrollHeight, clientHeight } = container;
+    const scrollTop = window.scrollY;
+    const scrollHeight = document.documentElement.scrollHeight;
+    const clientHeight = window.innerHeight;
     return scrollHeight - scrollTop - clientHeight < threshold;
   }, [threshold]);
 
-  // 滚动到容器底部
+  // 滚动到文档底部
   const scrollToBottom = useCallback(() => {
     if (!autoScrollEnabled) return;
 
-    const container = containerRef.current;
-    if (container) {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: "smooth",
-      });
-    }
+    window.scrollTo({
+      top: document.documentElement.scrollHeight,
+      behavior: "smooth",
+    });
   }, [autoScrollEnabled]);
 
-  // 处理用户滚动事件
   const handleScroll = useCallback(() => {
     if (isNearBottom()) {
       setAutoScrollEnabled(true);
@@ -42,11 +36,14 @@ export function useScroll(options: UseScrollOptions = {}) {
     }
   }, [isNearBottom]);
 
+  useEffect(() => {
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [handleScroll]);
+
   return {
-    containerRef,
     autoScrollEnabled,
     setAutoScrollEnabled,
-    handleScroll,
     scrollToBottom,
     isNearBottom,
   };

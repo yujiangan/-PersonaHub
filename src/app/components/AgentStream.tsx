@@ -102,13 +102,12 @@ export default function AgentStream({
   observationsByTool = {},
   thinkingContent,
 }: AgentStreamProps) {
-  const { containerRef, autoScrollEnabled, setAutoScrollEnabled, handleScroll, scrollToBottom } =
-    useScroll();
+  const { scrollToBottom } = useScroll();
 
   // 新内容到达时自动滚动
   useEffect(() => {
     scrollToBottom();
-  }, [finalReport, thinkingContent, scrollToBottom]);
+  }, [finalReport, thinkingContent, events, scrollToBottom]);
 
   if (!finalReport && !error && events.length === 0 && !thinkingContent) return null;
 
@@ -116,11 +115,8 @@ export default function AgentStream({
     <div className="agent-stream">
       {error && <div className="error-block">❌ {error}</div>}
 
-      <div ref={containerRef} onScroll={handleScroll} className="agent-stream-container">
+      <div className="agent-stream-container">
         <div className="events-container">
-          {/* 思考内容流式显示 - 使用 ThinkingCard 组件支持折叠 */}
-          {thinkingContent && <ThinkingCard content={thinkingContent} />}
-
           {events.map((event) => {
             const obs = event.toolCallId ? observationsByTool[event.toolCallId] : undefined;
             return (
@@ -129,6 +125,12 @@ export default function AgentStream({
               </div>
             );
           })}
+          {/* 当前轮次尚未结束的流式思考，排在已有事件之后（例如工具结果之后的新一轮思考） */}
+          {thinkingContent ? (
+            <div className="event-item">
+              <ThinkingCard content={thinkingContent} />
+            </div>
+          ) : null}
         </div>
 
         {/* 报告流式输出，边来边显示 */}
